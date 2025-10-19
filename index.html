@@ -22,6 +22,10 @@
     .muted{font-size:.9rem;opacity:.7;margin-top:8px}
     .debug{position:absolute;left:10px;top:10px;z-index:20;background:rgba(0,0,0,.55);color:#fff;padding:6px 8px;border-radius:8px;font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;font-size:12px}
 
+    /* Portrait reminder overlay when device is in landscape */
+    #rotate{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.5);color:#fff;z-index:30;text-align:center;padding:20px}
+    #rotate.show{display:flex}
+
     @media (prefers-color-scheme:dark){
       body{background:#0f1114}
       .card{background:rgba(20,22,26,.8);color:#eaeef2;border-color:rgba(255,255,255,.1)}
@@ -40,6 +44,7 @@
         <div class="muted" id="ovHint">(Desktop: use arrow keys to test)</div>
       </div>
     </div>
+    <div id="rotate"><div>Rotate to portrait</div></div>
     <div id="dbg" class="debug" hidden>debug</div>
   </div>
 
@@ -52,7 +57,7 @@ function computeSize(){
 }
 
 // ========= Config (depend on SIZE; recompute on resize) =========
-let CHANNEL_W, BALL_R, ARM_LEN, cx, cy;
+let CHANNEL_W, BALL_R, ARM_LEN, cx, cy, FILLET;
 const GRAVITY = 0.33;
 const FRICTION = 0.992;
 const BOUNCE = 0.2;
@@ -61,6 +66,7 @@ function recomputeDerived(){
   CHANNEL_W = Math.max(18, Math.round(SIZE * 0.175));
   BALL_R    = Math.round((CHANNEL_W * 0.98) / 2); // 98% of channel width
   ARM_LEN   = Math.round(SIZE * 0.78);            // length of each trench arm
+  FILLET    = Math.max(2, Math.round((CHANNEL_W/2) / 8)); // 1/8 of end radius
   cx = SIZE/2; cy = SIZE/2;
 }
 
@@ -74,7 +80,7 @@ let keyAccel = {x:0, y:0};
 let lastGamma = 0, lastBeta = 0;
 let overlayDismissed = false;
 
-// ========= Geometry helpers (capsules) =========
+// ========= Geometry helpers =========
 function nearestOnSegment(ax,ay,bx,by,px,py){
   const vx = bx-ax, vy = by-ay;
   const wx = px-ax, wy = py-ay;
@@ -83,13 +89,11 @@ function nearestOnSegment(ax,ay,bx,by,px,py){
   t = Math.max(0, Math.min(1, t));
   return {x: ax + t*vx, y: ay + t*vy, t};
 }
-
 function insideCapsule(p, A, B, rad){
   const n = nearestOnSegment(A.x,A.y,B.x,B.y,p.x,p.y);
   const dx = p.x - n.x, dy = p.y - n.y;
   return (dx*dx + dy*dy) <= rad*rad;
 }
-
 function projectToCapsuleBoundary(p, A, B, rad){
   const n = nearestOnSegment(A.x,A.y,B.x,B.y,p.x,p.y);
   const dx = p.x - n.x, dy = p.y - n.y;
@@ -98,23 +102,36 @@ function projectToCapsuleBoundary(p, A, B, rad){
   const nx = dx/d, ny = dy/d;
   return {point:{x: n.x + nx*rad, y: n.y + ny*rad}, normal:{x:nx, y:ny}, dist: d - rad};
 }
+function projectToCircle(p, Cx, Cy, rad){
+  const dx = p.x - Cx, dy = p.y - Cy;
+  const d = Math.hypot(dx,dy) || 1e-6;
+  if (d <= rad) return {point:{x:p.x,y:p.y}, normal:{x:0,y:0}, dist:0};
+  const nx = dx/d, ny = dy/d;
+  return {point:{x: Cx + nx*rad, y: Cy + ny*rad}, normal:{x:nx, y:ny}, dist: d - rad};
+}
 
-function unionCapsulesClamp(next){
+function unionFilletedCrossClamp(next){
   const half = ARM_LEN/2;
-  const hr = CHANNEL_W/2 - BALL_R; // clearance radius for ball center
+  const hr = CHANNEL_W/2 - BALL_R; // clearance for ball center
   const horizA = {x: cx - half, y: cy};
   const horizB = {x: cx + half, y: cy};
   const vertA  = {x: cx, y: cy - half};
   const vertB  = {x: cx, y: cy + half};
 
+  // quick inside checks
   const insideH = insideCapsule(next, horizA, horizB, hr);
   const insideV = insideCapsule(next, vertA,  vertB,  hr);
-  if (insideH || insideV) return {clamped: next, hit:false};
+  // central easing disk to simulate small fillets
+  const insideC = (Math.hypot(next.x-cx, next.y-cy) <= (hr + FILLET));
+  if (insideH || insideV || insideC) return {clamped: next, hit:false};
 
+  // Otherwise clamp to nearest among three boundaries
   const ph = projectToCapsuleBoundary(next, horizA, horizB, hr);
   const pv = projectToCapsuleBoundary(next, vertA,  vertB,  hr);
-  const useH = ph.dist <= pv.dist;
-  const chosen = useH ? ph : pv;
+  const pc = projectToCircle(next, cx, cy, hr + FILLET);
+  let chosen = ph;
+  if (pv.dist < chosen.dist) chosen = pv;
+  if (pc.dist < chosen.dist) chosen = pc;
 
   const nx = chosen.normal.x, ny = chosen.normal.y;
   const dot = vel.x*nx + vel.y*ny;
@@ -125,19 +142,19 @@ function unionCapsulesClamp(next){
   return {clamped: chosen.point, hit:true};
 }
 
-// ========= Rendering (flat, no shading) =========
+// ========= Rendering (flat, with inner fillets) =========
 function drawPlusFlat(ctx){
   // Background
   ctx.clearRect(0,0,SIZE,SIZE);
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0,0,SIZE,SIZE);
 
-  // Cross channels: equal arms, rounded ends
+  // Draw cross
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.lineWidth = CHANNEL_W;
-  ctx.strokeStyle = '#d7d7db'; // flat, no shading
+  ctx.strokeStyle = '#d7d7db';
 
   // horizontal
   ctx.beginPath();
@@ -151,10 +168,40 @@ function drawPlusFlat(ctx){
   ctx.lineTo(cx, cy + ARM_LEN/2);
   ctx.stroke();
   ctx.restore();
+
+  // Carve inner fillets (concave rounding) by overdrawing in background color
+  ctx.save();
+  ctx.fillStyle = '#ffffff';
+  const offset = (CHANNEL_W/2) - FILLET;
+  const centers = [
+    {x: cx - offset, y: cy - offset},
+    {x: cx + offset, y: cy - offset},
+    {x: cx - offset, y: cy + offset},
+    {x: cx + offset, y: cy + offset},
+  ];
+  for (const c of centers){
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, FILLET, 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  // Re-stroke thin edge to keep crisp outline (optional)
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#d7d7db';
+  ctx.beginPath();
+  ctx.moveTo(cx - ARM_LEN/2, cy);
+  ctx.lineTo(cx + ARM_LEN/2, cy);
+  ctx.moveTo(cx, cy - ARM_LEN/2);
+  ctx.lineTo(cx, cy + ARM_LEN/2);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawBall(ctx){
-  // Flat ball (no shading)
   ctx.save();
   ctx.fillStyle = '#e11d48';
   ctx.beginPath();
@@ -173,6 +220,7 @@ function setup(){
   pos = {x: cx, y: cy};
   initOverlay();
   window.addEventListener('resize', onResize);
+  setupOrientationGuard();
 }
 
 function onResize(){
@@ -182,6 +230,7 @@ function onResize(){
   resizeCanvas(SIZE, SIZE);
   const scale = SIZE/oldSize;
   pos.x *= scale; pos.y *= scale;
+  updateOrientationGuard();
 }
 
 function draw(){
@@ -191,12 +240,11 @@ function draw(){
   let ax = 0, ay = 0;
   if (usingOrientation){ ax += acc.x; ay += acc.y; }
   ax += keyAccel.x * 0.6; ay += keyAccel.y * 0.6;
-
   vel.x += ax; vel.y += ay;
   vel.x *= FRICTION; vel.y *= FRICTION;
 
   let next = { x: pos.x + vel.x, y: pos.y + vel.y };
-  const res = unionCapsulesClamp(next);
+  const res = unionFilletedCrossClamp(next);
   pos = res.clamped;
 
   // Keep fully inside canvas
@@ -303,11 +351,27 @@ function updateKeyAccel(){
 window.addEventListener('keydown', (e)=>{ if (e.key in KEYS){ KEYS[e.key]=true; updateKeyAccel(); }});
 window.addEventListener('keyup',   (e)=>{ if (e.key in KEYS){ KEYS[e.key]=false; updateKeyAccel(); }});
 
+// ========= Portrait guard =========
+let mql;
+function setupOrientationGuard(){
+  mql = window.matchMedia('(orientation: landscape)');
+  mql.addEventListener('change', updateOrientationGuard);
+  updateOrientationGuard();
+}
+function updateOrientationGuard(){
+  const rot = document.getElementById('rotate');
+  if (window.matchMedia('(orientation: landscape)').matches){
+    rot.classList.add('show');
+  } else {
+    rot.classList.remove('show');
+  }
+}
+
 // ========= Debug =========
 function debugOut(){
   const el = document.getElementById('dbg');
   el.hidden = false;
-  el.textContent = `size:${SIZE} ch:${CHANNEL_W} r:${BALL_R}
+  el.textContent = `size:${SIZE} ch:${CHANNEL_W} r:${BALL_R} fil:${FILLET}
 perm:${havePermission} orient:${usingOrientation}
 β:${lastBeta.toFixed(1)} γ:${lastGamma.toFixed(1)}
 ax:${acc.x.toFixed(3)} ay:${acc.y.toFixed(3)}`;
