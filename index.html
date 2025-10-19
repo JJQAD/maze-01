@@ -40,7 +40,7 @@
       <div class="card">
         <div id="ovTitle" style="font-size:1.1rem;font-weight:700;margin-bottom:8px">Enable tilt controls</div>
         <div id="ovText">On iPhone/iPad, Apple requires permission to read motion/orientation sensors.</div>
-        <button class="btn" id="ovBtn" style="margin-top:12px;touch-action:manipulation">Enable Tilt</button>
+        <button class="btn" id="ovBtn" style="margin-top:12px">Enable Tilt</button>
         <div class="muted" id="ovHint">(Desktop: use arrow keys to test)</div>
       </div>
     </div>
@@ -102,6 +102,7 @@ function projectToCapsuleBoundary(p, A, B, rad){
   const nx = dx/d, ny = dy/d;
   return {point:{x: n.x + nx*rad, y: n.y + ny*rad}, normal:{x:nx, y:ny}, dist: d - rad};
 }
+
 function projectToCircle(p, Cx, Cy, rad){
   const dx = p.x - Cx, dy = p.y - Cy;
   const d = Math.hypot(dx,dy) || 1e-6;
@@ -112,20 +113,17 @@ function projectToCircle(p, Cx, Cy, rad){
 
 function unionFilletedCrossClamp(next){
   const half = ARM_LEN/2;
-  const hr = CHANNEL_W/2 - BALL_R; // clearance for ball center
+  const hr = CHANNEL_W/2 - BALL_R;
   const horizA = {x: cx - half, y: cy};
   const horizB = {x: cx + half, y: cy};
   const vertA  = {x: cx, y: cy - half};
   const vertB  = {x: cx, y: cy + half};
 
-  // quick inside checks
   const insideH = insideCapsule(next, horizA, horizB, hr);
   const insideV = insideCapsule(next, vertA,  vertB,  hr);
-  // central easing disk to simulate small fillets
   const insideC = (Math.hypot(next.x-cx, next.y-cy) <= (hr + FILLET));
   if (insideH || insideV || insideC) return {clamped: next, hit:false};
 
-  // Otherwise clamp to nearest among three boundaries
   const ph = projectToCapsuleBoundary(next, horizA, horizB, hr);
   const pv = projectToCapsuleBoundary(next, vertA,  vertB,  hr);
   const pc = projectToCircle(next, cx, cy, hr + FILLET);
@@ -169,70 +167,49 @@ function drawPlusFlat(ctx){
   ctx.stroke();
   ctx.restore();
 
-  // Cut true inner fillets (quarter-circle subtraction), not whole circles
+  // Carve true inner fillets via destination-out quarter arcs
   const r = CHANNEL_W/2;
-  const f = FILLET; // fillet radius
+  const f = FILLET;
   ctx.save();
   ctx.globalCompositeOperation = 'destination-out';
   ctx.fillStyle = '#000';
 
-  // Top-left corner fillet
-  let cx0 = cx - (r - f), cy0 = cy - (r - f);
+  // TL corner
+  let fx = cx - (r - f), fy = cy - (r - f);
   ctx.beginPath();
-  ctx.moveTo(cx0, cy0);
-  ctx.arc(cx0, cy0, f, 0, Math.PI/2, false); // 0 → 90° (right to down)
+  ctx.moveTo(fx, fy);
+  ctx.arc(fx, fy, f, 0, Math.PI/2, false);
   ctx.closePath();
   ctx.fill();
 
-  // Top-right
-  cx0 = cx + (r - f); cy0 = cy - (r - f);
+  // TR corner
+  fx = cx + (r - f); fy = cy - (r - f);
   ctx.beginPath();
-  ctx.moveTo(cx0, cy0);
-  ctx.arc(cx0, cy0, f, Math.PI/2, Math.PI, false); // 90° → 180° (down to left)
+  ctx.moveTo(fx, fy);
+  ctx.arc(fx, fy, f, Math.PI/2, Math.PI, false);
   ctx.closePath();
   ctx.fill();
 
-  // Bottom-left
-  cx0 = cx - (r - f); cy0 = cy + (r - f);
+  // BL corner
+  fx = cx - (r - f); fy = cy + (r - f);
   ctx.beginPath();
-  ctx.moveTo(cx0, cy0);
-  ctx.arc(cx0, cy0, f, 1.5*Math.PI, 2*Math.PI, false); // 270° → 360° (up to right)
+  ctx.moveTo(fx, fy);
+  ctx.arc(fx, fy, f, 1.5*Math.PI, 2*Math.PI, false);
   ctx.closePath();
   ctx.fill();
 
-  // Bottom-right
-  cx0 = cx + (r - f); cy0 = cy + (r - f);
+  // BR corner
+  fx = cx + (r - f); fy = cy + (r - f);
   ctx.beginPath();
-  ctx.moveTo(cx0, cy0);
-  ctx.arc(cx0, cy0, f, Math.PI, 1.5*Math.PI, false); // 180° → 270° (left to up)
+  ctx.moveTo(fx, fy);
+  ctx.arc(fx, fy, f, Math.PI, 1.5*Math.PI, false);
   ctx.closePath();
   ctx.fill();
 
-  ctx.restore();
-
-  // Optional hairline re-stroke for crispness
-  ctx.save();
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = '#d7d7db';
-  ctx.beginPath();
-  ctx.moveTo(cx - ARM_LEN/2, cy);
-  ctx.lineTo(cx + ARM_LEN/2, cy);
-  ctx.moveTo(cx, cy - ARM_LEN/2);
-  ctx.lineTo(cx, cy + ARM_LEN/2);
-  ctx.stroke();
   ctx.restore();
 }
 
 function drawBall(ctx){
-  ctx.save();
-  ctx.fillStyle = '#e11d48';
-  ctx.beginPath();
-  ctx.arc(pos.x, pos.y, BALL_R, 0, Math.PI*2);
-  ctx.fill();
-  ctx.restore();
-}(ctx){
   ctx.save();
   ctx.fillStyle = '#e11d48';
   ctx.beginPath();
@@ -271,6 +248,7 @@ function draw(){
   let ax = 0, ay = 0;
   if (usingOrientation){ ax += acc.x; ay += acc.y; }
   ax += keyAccel.x * 0.6; ay += keyAccel.y * 0.6;
+
   vel.x += ax; vel.y += ay;
   vel.x *= FRICTION; vel.y *= FRICTION;
 
@@ -295,7 +273,7 @@ function handleOrientation(e){
   acc.y = GRAVITY * Math.sin(b * Math.PI/180);
 }
 
-async async function askPermission(){
+async function askPermission(){
   try{
     let ok = true;
     if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function'){
@@ -335,47 +313,8 @@ function initOverlay(){
     setTimeout(fadeOutOverlay, 900);
   }
 }
-(){
-  // Remove any existing listener first (avoid duplicates across retries)
-  window.removeEventListener('deviceorientation', handleOrientation, true);
-  window.addEventListener('deviceorientation', handleOrientation, true);
-  usingOrientation = true;
-}(){
-  window.addEventListener('deviceorientation', handleOrientation, true);
-  usingOrientation = true;
-}(){
-  window.addEventListener('deviceorientation', handleOrientation, true);
-  usingOrientation = true;
-}
 
 // ========= Overlay control =========
-function initOverlay(){
-  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-  const needsPerm = typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function';
-  const btn = document.getElementById('ovBtn');
-
-  const gestureOnce = (ev)=>{
-    document.removeEventListener('touchstart', gestureOnce, {capture:true});
-    document.removeEventListener('click', gestureOnce, {capture:true});
-    askPermission(ev);
-  };
-
-  if (isIOS && needsPerm){
-    // iOS 13+ path: wait for a **user gesture anywhere** (button or background)
-    setOverlayMode('permission');
-    btn.addEventListener('click', askPermission, {once:true});
-    btn.addEventListener('touchstart', askPermission, {once:true});
-    // global safety net — any first tap/click triggers permission
-    document.addEventListener('touchstart', gestureOnce, {capture:true, passive:false});
-    document.addEventListener('click', gestureOnce, {capture:true});
-  } else {
-    // Non-iOS (or older iOS): start immediately
-    startOrientation();
-    setOverlayMode('hint');
-    setTimeout(fadeOutOverlay, 900);
-  }
-}
-
 function setOverlayMode(mode){
   const overlay = document.getElementById('overlay');
   const title = document.getElementById('ovTitle');
