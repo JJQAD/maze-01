@@ -47,12 +47,11 @@
 // ========= Responsive sizing =========
 let SIZE = 400; // will be set to viewport width
 function computeSize(){
-  // Fit the width of the screen; keep square; then vertically center via flex (CSS)
-  const w = Math.min(window.innerWidth, 1024); // cap for tablets
+  const w = Math.min(window.innerWidth, 1024);
   SIZE = Math.floor(w);
 }
 
-// ========= Config (depend on SIZE; will be recomputed on resize) =========
+// ========= Config (depend on SIZE; recompute on resize) =========
 let CHANNEL_W, BALL_R, ARM_LEN, cx, cy;
 const GRAVITY = 0.33;
 const FRICTION = 0.992;
@@ -95,14 +94,12 @@ function projectToCapsuleBoundary(p, A, B, rad){
   const n = nearestOnSegment(A.x,A.y,B.x,B.y,p.x,p.y);
   const dx = p.x - n.x, dy = p.y - n.y;
   const d = Math.hypot(dx,dy) || 1e-6;
-  // If inside, return original; if outside, clamp to boundary at distance rad from centerline
   if (d <= rad) return {point:{x:p.x, y:p.y}, normal:{x:0,y:0}, dist:0};
   const nx = dx/d, ny = dy/d;
   return {point:{x: n.x + nx*rad, y: n.y + ny*rad}, normal:{x:nx, y:ny}, dist: d - rad};
 }
 
 function unionCapsulesClamp(next){
-  // Two orthogonal capsules centered at (cx,cy)
   const half = ARM_LEN/2;
   const hr = CHANNEL_W/2 - BALL_R; // clearance radius for ball center
   const horizA = {x: cx - half, y: cy};
@@ -114,13 +111,11 @@ function unionCapsulesClamp(next){
   const insideV = insideCapsule(next, vertA,  vertB,  hr);
   if (insideH || insideV) return {clamped: next, hit:false};
 
-  // Outside union → clamp to nearest boundary among the two capsules
   const ph = projectToCapsuleBoundary(next, horizA, horizB, hr);
   const pv = projectToCapsuleBoundary(next, vertA,  vertB,  hr);
   const useH = ph.dist <= pv.dist;
   const chosen = useH ? ph : pv;
 
-  // Reflect velocity along normal for a gentle bounce
   const nx = chosen.normal.x, ny = chosen.normal.y;
   const dot = vel.x*nx + vel.y*ny;
   if (dot > 0){
@@ -130,131 +125,45 @@ function unionCapsulesClamp(next){
   return {clamped: chosen.point, hit:true};
 }
 
-// ========= Rendering helpers =========
-function drawPlusTrench(ctx){
-  // Offscreen layers for horizontal and vertical trenches with rounded ends & cylindrical shading
-  const off = document.createElement('canvas');
-  off.width = off.height = SIZE*2; // generous for high-DPR
-  const ox = off.getContext('2d');
-  ox.clearRect(0,0,off.width,off.height);
-
-  function trenchLayer(isHorizontal){
-    ox.clearRect(0,0,off.width,off.height);
-    ox.save();
-    ox.scale(2,2); // match high-DPR mask resolution
-    ox.lineCap = 'round';
-    ox.lineJoin = 'round';
-    ox.strokeStyle = '#000';
-    ox.lineWidth = CHANNEL_W;
-    ox.beginPath();
-    if (isHorizontal){
-      ox.moveTo(cx-ARM_LEN/2, cy);
-      ox.lineTo(cx+ARM_LEN/2, cy);
-    } else {
-      ox.moveTo(cx, cy-ARM_LEN/2);
-      ox.lineTo(cx, cy+ARM_LEN/2);
-    }
-    ox.stroke();
-    // Convert stroke to alpha mask by using source-in with gradient fill
-    ox.globalCompositeOperation = 'source-in';
-    // Gradient across the narrow axis (simulate half-round)
-    let grad;
-    if (isHorizontal){
-      grad = ox.createLinearGradient(0, (cy-CHANNEL_W/2)*2, 0, (cy+CHANNEL_W/2)*2);
-    } else {
-      grad = ox.createLinearGradient((cx-CHANNEL_W/2)*2, 0, (cx+CHANNEL_W/2)*2, 0);
-    }
-    grad.addColorStop(0.00, 'rgba(0,0,0,0.18)');
-    grad.addColorStop(0.10, 'rgba(0,0,0,0.10)');
-    grad.addColorStop(0.50, 'rgba(0,0,0,0.22)');
-    grad.addColorStop(0.90, 'rgba(0,0,0,0.10)');
-    grad.addColorStop(1.00, 'rgba(0,0,0,0.18)');
-    ox.fillStyle = grad;
-    ox.fillRect(0,0,off.width,off.height);
-
-    // Slight inner rim for carve effect
-    ox.globalCompositeOperation = 'source-over';
-    ox.lineWidth = 2;
-    ox.strokeStyle = 'rgba(0,0,0,0.08)';
-    ox.beginPath();
-    if (isHorizontal){
-      ox.moveTo(cx-ARM_LEN/2+1, cy);
-      ox.lineTo(cx+ARM_LEN/2-1, cy);
-    } else {
-      ox.moveTo(cx, cy-ARM_LEN/2+1);
-      ox.lineTo(cx, cy+ARM_LEN/2-1);
-    }
-    ox.stroke();
-
-    const result = ox.getImageData(0,0,off.width,off.height);
-    ox.restore();
-    return result;
-  }
-
-  const horiz = trenchLayer(true);
-  const vert  = trenchLayer(false);
-
-  // Draw base slab background
+// ========= Rendering (flat, no shading) =========
+function drawPlusFlat(ctx){
+  // Background
+  ctx.clearRect(0,0,SIZE,SIZE);
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0,0,SIZE,SIZE);
-  // Subtle vignette
-  const vignette = ctx.createRadialGradient(cx, cy, SIZE*0.1, cx, cy, SIZE*0.8);
-  vignette.addColorStop(0, 'rgba(0,0,0,0)');
-  vignette.addColorStop(1, 'rgba(0,0,0,0.06)');
-  ctx.fillStyle = vignette;
-  ctx.fillRect(0,0,SIZE,SIZE);
 
-  // Blit layers: first horizontal normal, then vertical with multiply so intersection reads deeper
+  // Cross channels: equal arms, rounded ends
   ctx.save();
-  ctx.drawImage(off, 0, 0, off.width, off.height, 0, 0, SIZE, SIZE);
-  ctx.globalCompositeOperation = 'multiply';
-  // Put vertical into the offscreen buffer again
-  const cv = document.createElement('canvas');
-  cv.width = off.width; cv.height = off.height;
-  const cvx = cv.getContext('2d');
-  cvx.putImageData(vert,0,0);
-  ctx.drawImage(cv, 0, 0, off.width, off.height, 0, 0, SIZE, SIZE);
-  ctx.restore();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = CHANNEL_W;
+  ctx.strokeStyle = '#d7d7db'; // flat, no shading
 
-  // Extra depth puck at the intersection for a smooth curved look
-  const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, CHANNEL_W*0.7);
-  core.addColorStop(0.0, 'rgba(0,0,0,0.10)');
-  core.addColorStop(1.0, 'rgba(0,0,0,0.0)');
-  ctx.globalCompositeOperation = 'multiply';
-  ctx.fillStyle = core;
+  // horizontal
   ctx.beginPath();
-  ctx.arc(cx, cy, CHANNEL_W*0.7, 0, Math.PI*2);
-  ctx.fill();
-  ctx.globalCompositeOperation = 'source-over';
+  ctx.moveTo(cx - ARM_LEN/2, cy);
+  ctx.lineTo(cx + ARM_LEN/2, cy);
+  ctx.stroke();
+
+  // vertical
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - ARM_LEN/2);
+  ctx.lineTo(cx, cy + ARM_LEN/2);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawBall(ctx){
-  // Shadow
+  // Flat ball (no shading)
   ctx.save();
-  ctx.fillStyle = 'rgba(0,0,0,0.35)';
-  ctx.beginPath();
-  ctx.ellipse(pos.x, pos.y + BALL_R*0.55, BALL_R*2.1, BALL_R*0.85, 0, 0, Math.PI*2);
-  ctx.fill();
-
-  // Body gradient
-  const grad = ctx.createRadialGradient(pos.x - BALL_R*0.4, pos.y - BALL_R*0.6, BALL_R*0.2, pos.x, pos.y, BALL_R);
-  grad.addColorStop(0, '#ffb3b3');
-  grad.addColorStop(0.35, '#ff4d4d');
-  grad.addColorStop(1, '#b10818');
-  ctx.fillStyle = grad;
+  ctx.fillStyle = '#e11d48';
   ctx.beginPath();
   ctx.arc(pos.x, pos.y, BALL_R, 0, Math.PI*2);
-  ctx.fill();
-  // Highlight
-  ctx.fillStyle = 'rgba(255,255,255,0.75)';
-  ctx.beginPath();
-  ctx.arc(pos.x - BALL_R*0.45, pos.y - BALL_R*0.6, BALL_R*0.25, 0, Math.PI*2);
   ctx.fill();
   ctx.restore();
 }
 
 // ========= p5 Sketch =========
-let pg; // p5 graphics (we'll use underlying 2D ctx)
 function setup(){
   computeSize();
   recomputeDerived();
@@ -271,16 +180,14 @@ function onResize(){
   computeSize();
   recomputeDerived();
   resizeCanvas(SIZE, SIZE);
-  // Keep ball relative position
   const scale = SIZE/oldSize;
   pos.x *= scale; pos.y *= scale;
 }
 
 function draw(){
   const ctx = this.drawingContext;
-  drawPlusTrench(ctx);
+  drawPlusFlat(ctx);
 
-  // Acceleration from sensors + keys
   let ax = 0, ay = 0;
   if (usingOrientation){ ax += acc.x; ay += acc.y; }
   ax += keyAccel.x * 0.6; ay += keyAccel.y * 0.6;
