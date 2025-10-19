@@ -40,7 +40,7 @@
       <div class="card">
         <div id="ovTitle" style="font-size:1.1rem;font-weight:700;margin-bottom:8px">Enable tilt controls</div>
         <div id="ovText">On iPhone/iPad, Apple requires permission to read motion/orientation sensors.</div>
-        <button class="btn" id="ovBtn" style="margin-top:12px" onclick="askPermission(event)">Enable Tilt</button>
+        <button class="btn" id="ovBtn" style="margin-top:12px;touch-action:manipulation">Enable Tilt</button>
         <div class="muted" id="ovHint">(Desktop: use arrow keys to test)</div>
       </div>
     </div>
@@ -297,22 +297,25 @@ function handleOrientation(e){
 
 async async function askPermission(ev){
   try{
-    if (ev){ ev.preventDefault(); ev.stopPropagation(); }
-    let ok = true;
-    let usedAPI = false;
+    if (ev){ ev.preventDefault?.(); ev.stopPropagation?.(); }
+    let granted = true; // assume ok unless API says otherwise
+    let checked = false;
     if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function'){
-      usedAPI = true;
+      checked = true;
       const p1 = await DeviceOrientationEvent.requestPermission();
-      ok = ok && (p1 === 'granted');
+      granted = (p1 === 'granted') && granted;
     }
     if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function'){
-      usedAPI = true;
+      checked = true;
       const p2 = await DeviceMotionEvent.requestPermission();
-      ok = ok && (p2 === 'granted');
+      granted = (p2 === 'granted') && granted;
     }
-    // Start orientation if granted or if no API (older iOS/Android)
-    if (ok || !usedAPI){
-      havePermission = ok;
+    if (!checked){
+      // No permission API available — proceed
+      granted = true;
+    }
+    if (granted){
+      havePermission = true;
       startOrientation();
     }
   }catch(err){
@@ -323,6 +326,11 @@ async async function askPermission(ev){
 }
 
 function startOrientation(){
+  // Remove any existing listener first (avoid duplicates across retries)
+  window.removeEventListener('deviceorientation', handleOrientation, true);
+  window.addEventListener('deviceorientation', handleOrientation, true);
+  usingOrientation = true;
+}(){
   window.addEventListener('deviceorientation', handleOrientation, true);
   usingOrientation = true;
 }(){
@@ -335,21 +343,24 @@ function initOverlay(){
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const needsPerm = typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function';
   const btn = document.getElementById('ovBtn');
-  const overlay = document.getElementById('overlay');
 
-  // Start listening immediately; permission gating only affects sensor values
-  startOrientation();
-
-  // Redundant bindings to be extra safe across iOS Safari versions
-  btn.addEventListener('click', askPermission);
-  overlay.addEventListener('click', (e)=>{
-    // Allow tapping anywhere on the overlay to proceed if the button doesn't fire
-    if (e.target === overlay) askPermission(e);
-  });
+  const gestureOnce = (ev)=>{
+    document.removeEventListener('touchstart', gestureOnce, {capture:true});
+    document.removeEventListener('click', gestureOnce, {capture:true});
+    askPermission(ev);
+  };
 
   if (isIOS && needsPerm){
+    // iOS 13+ path: wait for a **user gesture anywhere** (button or background)
     setOverlayMode('permission');
+    btn.addEventListener('click', askPermission, {once:true});
+    btn.addEventListener('touchstart', askPermission, {once:true});
+    // global safety net — any first tap/click triggers permission
+    document.addEventListener('touchstart', gestureOnce, {capture:true, passive:false});
+    document.addEventListener('click', gestureOnce, {capture:true});
   } else {
+    // Non-iOS (or older iOS): start immediately
+    startOrientation();
     setOverlayMode('hint');
     setTimeout(fadeOutOverlay, 900);
   }
