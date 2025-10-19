@@ -295,19 +295,24 @@ function handleOrientation(e){
   acc.y = GRAVITY * Math.sin(b * Math.PI/180);
 }
 
-async function askPermission(){
+async async function askPermission(ev){
   try{
+    if (ev){ ev.preventDefault(); ev.stopPropagation(); }
     let ok = true;
+    let usedAPI = false;
     if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function'){
+      usedAPI = true;
       const p1 = await DeviceOrientationEvent.requestPermission();
       ok = ok && (p1 === 'granted');
     }
     if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function'){
+      usedAPI = true;
       const p2 = await DeviceMotionEvent.requestPermission();
       ok = ok && (p2 === 'granted');
     }
-    if (ok){
-      havePermission = true;
+    // Start orientation if granted or if no API (older iOS/Android)
+    if (ok || !usedAPI){
+      havePermission = ok;
       startOrientation();
     }
   }catch(err){
@@ -320,6 +325,9 @@ async function askPermission(){
 function startOrientation(){
   window.addEventListener('deviceorientation', handleOrientation, true);
   usingOrientation = true;
+}(){
+  window.addEventListener('deviceorientation', handleOrientation, true);
+  usingOrientation = true;
 }
 
 // ========= Overlay control =========
@@ -327,7 +335,11 @@ function initOverlay(){
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const needsPerm = typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function';
   const btn = document.getElementById('ovBtn');
-  btn.addEventListener('click', askPermission, {once:true});
+  const handler = (e)=>askPermission(e);
+  // Bind both to be safe across browsers (and prevent duplicate via stopPropagation)
+  btn.addEventListener('click', handler, {once:true});
+  btn.addEventListener('touchend', handler, {once:true});
+  btn.onclick = handler; // belt + suspenders
   if (isIOS && needsPerm){
     setOverlayMode('permission');
   } else {
