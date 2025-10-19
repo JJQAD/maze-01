@@ -295,26 +295,18 @@ function handleOrientation(e){
   acc.y = GRAVITY * Math.sin(b * Math.PI/180);
 }
 
-async async function askPermission(ev){
+async async function askPermission(){
   try{
-    if (ev){ ev.preventDefault?.(); ev.stopPropagation?.(); }
-    let granted = true; // assume ok unless API says otherwise
-    let checked = false;
+    let ok = true;
     if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function'){
-      checked = true;
       const p1 = await DeviceOrientationEvent.requestPermission();
-      granted = (p1 === 'granted') && granted;
+      ok = ok && (p1 === 'granted');
     }
     if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function'){
-      checked = true;
       const p2 = await DeviceMotionEvent.requestPermission();
-      granted = (p2 === 'granted') && granted;
+      ok = ok && (p2 === 'granted');
     }
-    if (!checked){
-      // No permission API available — proceed
-      granted = true;
-    }
-    if (granted){
+    if (ok){
       havePermission = true;
       startOrientation();
     }
@@ -326,6 +318,24 @@ async async function askPermission(ev){
 }
 
 function startOrientation(){
+  window.addEventListener('deviceorientation', handleOrientation, true);
+  usingOrientation = true;
+}
+
+function initOverlay(){
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const needsPerm = typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function';
+  const btn = document.getElementById('ovBtn');
+  btn.addEventListener('click', askPermission, {once:true});
+  if (isIOS && needsPerm){
+    setOverlayMode('permission');
+  } else {
+    startOrientation();
+    setOverlayMode('hint');
+    setTimeout(fadeOutOverlay, 900);
+  }
+}
+(){
   // Remove any existing listener first (avoid duplicates across retries)
   window.removeEventListener('deviceorientation', handleOrientation, true);
   window.addEventListener('deviceorientation', handleOrientation, true);
