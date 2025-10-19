@@ -4,7 +4,6 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover" />
   <title>Maze Tilt Test · JJQAD</title>
-  <!-- iOS web-app friendly bits -->
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Maze Tilt Test" />
@@ -14,17 +13,19 @@
     body{display:grid;place-items:center;background:#f5f5f7;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
     #wrap{position:relative;width:800px;height:800px}
     canvas{display:block;border-radius:24px;box-shadow:0 10px 30px rgba(0,0,0,.12),0 1px 2px rgba(0,0,0,.15)}
-    /* overlay for permission / instructions */
-    .overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:10}
+
+    /* unified overlay */
+    .overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:10;opacity:1;transition:opacity .45s ease}
+    .overlay.fade-out{opacity:0;pointer-events:none}
+    .overlay.hidden{display:none}
     .card{backdrop-filter:blur(8px);background:rgba(255,255,255,.9);border:1px solid rgba(0,0,0,.08);border-radius:16px;padding:18px 20px;max-width:80%;text-align:center;box-shadow:0 6px 20px rgba(0,0,0,.12)}
-    .btn{appearance:none;border:0;border-radius:12px;padding:12px 16px;font-weight:600;cursor:pointer}
-    .btn-primary{background:#111;color:#fff}
+    .btn{appearance:none;border:0;border-radius:12px;padding:12px 16px;font-weight:600;cursor:pointer;background:#111;color:#fff}
     .muted{font-size:.9rem;opacity:.7;margin-top:8px}
     .debug{position:absolute;left:10px;top:10px;z-index:20;background:rgba(0,0,0,.55);color:#fff;padding:6px 8px;border-radius:8px;font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;font-size:12px}
     @media (prefers-color-scheme:dark){
       body{background:#0f1114}
       .card{background:rgba(20,22,26,.8);color:#eaeef2;border-color:rgba(255,255,255,.1)}
-      .btn-primary{background:#e11d48}
+      .btn{background:#e11d48}
     }
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.3/p5.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
@@ -32,16 +33,13 @@
 <body>
   <div id="wrap">
     <!-- p5 injects the canvas here -->
-    <div id="permission" class="overlay" hidden>
+    <div id="overlay" class="overlay">
       <div class="card">
-        <div style="font-size:1.1rem;font-weight:700;margin-bottom:8px">Enable tilt controls</div>
-        <div>On iPhone/iPad, Apple requires permission to read motion/orientation sensors.</div>
-        <button class="btn btn-primary" id="askBtn" style="margin-top:12px">Enable Tilt</button>
-        <div class="muted">(Desktop: use arrow keys to test)</div>
+        <div id="ovTitle" style="font-size:1.1rem;font-weight:700;margin-bottom:8px">Enable tilt controls</div>
+        <div id="ovText">On iPhone/iPad, Apple requires permission to read motion/orientation sensors.</div>
+        <button class="btn" id="ovBtn" style="margin-top:12px">Enable Tilt</button>
+        <div class="muted" id="ovHint">(Desktop: use arrow keys to test)</div>
       </div>
-    </div>
-    <div id="info" class="overlay" style="pointer-events:none;" hidden>
-      <div class="card" style="padding:10px 12px"><span id="hint">Tilt to roll</span></div>
     </div>
     <div id="dbg" class="debug" hidden>debug</div>
   </div>
@@ -64,6 +62,7 @@ let usingOrientation = false;
 let havePermission = false;
 let keyAccel = {x:0, y:0};
 let lastGamma = 0, lastBeta = 0;
+let overlayDismissed = false;
 
 // ========= Helpers =========
 function clampToChannel(p){
@@ -159,9 +158,7 @@ function setup(){
   const c = createCanvas(SIZE, SIZE);
   c.parent('wrap');
   pixelDensity(2);
-  maybeShowPermissionOverlay();
-  const hint = document.getElementById('hint');
-  if (!isMobile()){ hint.textContent = 'Use arrow keys to roll'; }
+  initOverlay();
 }
 
 function draw(){
@@ -181,7 +178,6 @@ function draw(){
   pos = next;
 
   drawBall(this);
-
   debugOut();
 }
 
@@ -195,7 +191,6 @@ function handleOrientation(e){
 }
 
 async function askPermission(){
-  const overlay = document.getElementById('permission');
   try{
     let ok = true;
     if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function'){
@@ -213,8 +208,7 @@ async function askPermission(){
   }catch(err){
     console.warn('Permission error', err);
   }finally{
-    overlay.hidden = true;
-    document.getElementById('info').hidden = false;
+    showHintAndFade();
   }
 }
 
@@ -223,21 +217,56 @@ function startOrientation(){
   usingOrientation = true;
 }
 
-function maybeShowPermissionOverlay(){
+// ========= Overlay control =========
+function initOverlay(){
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const needsPerm = typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function';
-  const overlay = document.getElementById('permission');
-  const info = document.getElementById('info');
-  const btn = document.getElementById('askBtn');
-  const trigger = ()=>askPermission();
-  btn.addEventListener('click', trigger, {passive:true});
-  btn.addEventListener('touchend', trigger, {passive:true});
+  const btn = document.getElementById('ovBtn');
+  btn.addEventListener('click', askPermission, {once:true});
+
   if (isIOS && needsPerm){
-    overlay.hidden = false;
+    setOverlayMode('permission');
   } else {
-    info.hidden = false;
     startOrientation();
+    setOverlayMode('hint');
+    setTimeout(fadeOutOverlay, 900);
   }
+}
+
+function setOverlayMode(mode){
+  const overlay = document.getElementById('overlay');
+  const title = document.getElementById('ovTitle');
+  const text  = document.getElementById('ovText');
+  const btn   = document.getElementById('ovBtn');
+  const hint  = document.getElementById('ovHint');
+  overlay.classList.remove('hidden','fade-out');
+  if (mode === 'permission'){
+    title.textContent = 'Enable tilt controls';
+    text.textContent  = 'On iPhone/iPad, Apple requires permission to read motion/orientation sensors.';
+    btn.style.display = '';
+    hint.textContent  = '(Desktop: use arrow keys to test)';
+  } else {
+    title.textContent = 'Tilt to roll';
+    text.textContent  = '';
+    btn.style.display = 'none';
+    hint.textContent  = '';
+  }
+}
+
+function showHintAndFade(){
+  if (overlayDismissed) return;
+  setOverlayMode('hint');
+  setTimeout(fadeOutOverlay, 650);
+}
+
+function fadeOutOverlay(){
+  if (overlayDismissed) return;
+  const overlay = document.getElementById('overlay');
+  overlay.classList.add('fade-out');
+  overlay.addEventListener('transitionend', ()=>{
+    overlay.classList.add('hidden');
+    overlayDismissed = true;
+  }, {once:true});
 }
 
 // ========= Keyboard fallback =========
@@ -250,14 +279,12 @@ window.addEventListener('keydown', (e)=>{ if (e.key in KEYS){ KEYS[e.key]=true; 
 window.addEventListener('keyup',   (e)=>{ if (e.key in KEYS){ KEYS[e.key]=false; updateKeyAccel(); }});
 
 // ========= Utilities =========
-function isMobile(){
-  return /Android|iPhone|iPad|iPod|IEMobile|Opera Mini/i.test(navigator.userAgent);
-}
-
 function debugOut(){
   const el = document.getElementById('dbg');
   el.hidden = false;
-  el.textContent = `perm:${havePermission} orient:${usingOrientation}\nβ:${lastBeta.toFixed(1)} γ:${lastGamma.toFixed(1)}\nax:${acc.x.toFixed(3)} ay:${acc.y.toFixed(3)}`;
+  el.textContent = `perm:${havePermission} orient:${usingOrientation}
+β:${lastBeta.toFixed(1)} γ:${lastGamma.toFixed(1)}
+ax:${acc.x.toFixed(3)} ay:${acc.y.toFixed(3)}`;
 }
 </script>
 </body>
