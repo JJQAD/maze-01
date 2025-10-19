@@ -40,7 +40,7 @@
       <div class="card">
         <div id="ovTitle" style="font-size:1.1rem;font-weight:700;margin-bottom:8px">Enable tilt controls</div>
         <div id="ovText">On iPhone/iPad, Apple requires permission to read motion/orientation sensors.</div>
-        <button class="btn" id="ovBtn" style="margin-top:12px">Enable Tilt</button>
+        <button class="btn" id="ovBtn" style="margin-top:12px" onclick="askPermission(event)">Enable Tilt</button>
         <div class="muted" id="ovHint">(Desktop: use arrow keys to test)</div>
       </div>
     </div>
@@ -335,15 +335,21 @@ function initOverlay(){
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const needsPerm = typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function';
   const btn = document.getElementById('ovBtn');
-  const handler = (e)=>askPermission(e);
-  // Bind both to be safe across browsers (and prevent duplicate via stopPropagation)
-  btn.addEventListener('click', handler, {once:true});
-  btn.addEventListener('touchend', handler, {once:true});
-  btn.onclick = handler; // belt + suspenders
+  const overlay = document.getElementById('overlay');
+
+  // Start listening immediately; permission gating only affects sensor values
+  startOrientation();
+
+  // Redundant bindings to be extra safe across iOS Safari versions
+  btn.addEventListener('click', askPermission);
+  overlay.addEventListener('click', (e)=>{
+    // Allow tapping anywhere on the overlay to proceed if the button doesn't fire
+    if (e.target === overlay) askPermission(e);
+  });
+
   if (isIOS && needsPerm){
     setOverlayMode('permission');
   } else {
-    startOrientation();
     setOverlayMode('hint');
     setTimeout(fadeOutOverlay, 900);
   }
