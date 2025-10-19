@@ -10,11 +10,10 @@
   <style>
     :root{color-scheme:light dark}
     html,body{height:100%;margin:0}
-    body{display:grid;place-items:center;background:#f5f5f7;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
-    #wrap{position:relative;width:800px;height:800px}
+    body{display:flex;align-items:center;justify-content:center;background:#f5f5f7;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+    #wrap{position:relative;width:100vw;height:100vh;display:flex;align-items:center;justify-content:center}
     canvas{display:block;border-radius:24px;box-shadow:0 10px 30px rgba(0,0,0,.12),0 1px 2px rgba(0,0,0,.15)}
 
-    /* unified overlay */
     .overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:10;opacity:1;transition:opacity .45s ease}
     .overlay.fade-out{opacity:0;pointer-events:none}
     .overlay.hidden{display:none}
@@ -22,6 +21,7 @@
     .btn{appearance:none;border:0;border-radius:12px;padding:12px 16px;font-weight:600;cursor:pointer;background:#111;color:#fff}
     .muted{font-size:.9rem;opacity:.7;margin-top:8px}
     .debug{position:absolute;left:10px;top:10px;z-index:20;background:rgba(0,0,0,.55);color:#fff;padding:6px 8px;border-radius:8px;font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;font-size:12px}
+
     @media (prefers-color-scheme:dark){
       body{background:#0f1114}
       .card{background:rgba(20,22,26,.8);color:#eaeef2;border-color:rgba(255,255,255,.1)}
@@ -32,7 +32,6 @@
 </head>
 <body>
   <div id="wrap">
-    <!-- p5 injects the canvas here -->
     <div id="overlay" class="overlay">
       <div class="card">
         <div id="ovTitle" style="font-size:1.1rem;font-weight:700;margin-bottom:8px">Enable tilt controls</div>
@@ -45,101 +44,199 @@
   </div>
 
 <script>
-// ========= Config =========
-const SIZE = 800;             // canvas is 800 × 800 px
-const CHANNEL_W = 140;        // visual width of carved channel
-const BALL_R = 14;            // ball radius
-const GRAVITY = 0.33;         // acceleration scale from tilt
-const FRICTION = 0.992;       // surface friction (velocity damping)
-const BOUNCE = 0.2;           // restitution when hitting channel walls
+// ========= Responsive sizing =========
+let SIZE = 400; // will be set to viewport width
+function computeSize(){
+  // Fit the width of the screen; keep square; then vertically center via flex (CSS)
+  const w = Math.min(window.innerWidth, 1024); // cap for tablets
+  SIZE = Math.floor(w);
+}
 
-let cx = SIZE/2, cy = SIZE/2;
-let pos = {x: cx, y: cy};
+// ========= Config (depend on SIZE; will be recomputed on resize) =========
+let CHANNEL_W, BALL_R, ARM_LEN, cx, cy;
+const GRAVITY = 0.33;
+const FRICTION = 0.992;
+const BOUNCE = 0.2;
+
+function recomputeDerived(){
+  CHANNEL_W = Math.max(18, Math.round(SIZE * 0.175));
+  BALL_R    = Math.round((CHANNEL_W * 0.98) / 2); // 98% of channel width
+  ARM_LEN   = Math.round(SIZE * 0.78);            // length of each trench arm
+  cx = SIZE/2; cy = SIZE/2;
+}
+
+// ========= Physics =========
+let pos = {x: 0, y: 0};
 let vel = {x: 0, y: 0};
 let acc = {x: 0, y: 0};
-
 let usingOrientation = false;
 let havePermission = false;
 let keyAccel = {x:0, y:0};
 let lastGamma = 0, lastBeta = 0;
 let overlayDismissed = false;
 
-// ========= Helpers =========
-function clampToChannel(p){
-  const half = CHANNEL_W/2;
-  const dx = p.x - cx;
-  const dy = p.y - cy;
-  const insideH = Math.abs(dy) <= half; // within horizontal strip
-  const insideV = Math.abs(dx) <= half; // within vertical strip
-
-  if (insideH || insideV) return p; // allowed
-
-  const penX = Math.abs(dx) - half;
-  const penY = Math.abs(dy) - half;
-  if (penX < penY){
-    p.x = cx + Math.sign(dx) * half;
-    vel.x *= -BOUNCE;
-  } else {
-    p.y = cy + Math.sign(dy) * half;
-    vel.y *= -BOUNCE;
-  }
-  return p;
+// ========= Geometry helpers (capsules) =========
+function nearestOnSegment(ax,ay,bx,by,px,py){
+  const vx = bx-ax, vy = by-ay;
+  const wx = px-ax, wy = py-ay;
+  const L2 = vx*vx+vy*vy;
+  let t = L2 ? (wx*vx+wy*vy)/L2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  return {x: ax + t*vx, y: ay + t*vy, t};
 }
 
-function drawChannel(g){
-  const ctx = g.drawingContext;
-  g.push();
-  g.background('#ffffff');
+function insideCapsule(p, A, B, rad){
+  const n = nearestOnSegment(A.x,A.y,B.x,B.y,p.x,p.y);
+  const dx = p.x - n.x, dy = p.y - n.y;
+  return (dx*dx + dy*dy) <= rad*rad;
+}
 
+function projectToCapsuleBoundary(p, A, B, rad){
+  const n = nearestOnSegment(A.x,A.y,B.x,B.y,p.x,p.y);
+  const dx = p.x - n.x, dy = p.y - n.y;
+  const d = Math.hypot(dx,dy) || 1e-6;
+  // If inside, return original; if outside, clamp to boundary at distance rad from centerline
+  if (d <= rad) return {point:{x:p.x, y:p.y}, normal:{x:0,y:0}, dist:0};
+  const nx = dx/d, ny = dy/d;
+  return {point:{x: n.x + nx*rad, y: n.y + ny*rad}, normal:{x:nx, y:ny}, dist: d - rad};
+}
+
+function unionCapsulesClamp(next){
+  // Two orthogonal capsules centered at (cx,cy)
+  const half = ARM_LEN/2;
+  const hr = CHANNEL_W/2 - BALL_R; // clearance radius for ball center
+  const horizA = {x: cx - half, y: cy};
+  const horizB = {x: cx + half, y: cy};
+  const vertA  = {x: cx, y: cy - half};
+  const vertB  = {x: cx, y: cy + half};
+
+  const insideH = insideCapsule(next, horizA, horizB, hr);
+  const insideV = insideCapsule(next, vertA,  vertB,  hr);
+  if (insideH || insideV) return {clamped: next, hit:false};
+
+  // Outside union → clamp to nearest boundary among the two capsules
+  const ph = projectToCapsuleBoundary(next, horizA, horizB, hr);
+  const pv = projectToCapsuleBoundary(next, vertA,  vertB,  hr);
+  const useH = ph.dist <= pv.dist;
+  const chosen = useH ? ph : pv;
+
+  // Reflect velocity along normal for a gentle bounce
+  const nx = chosen.normal.x, ny = chosen.normal.y;
+  const dot = vel.x*nx + vel.y*ny;
+  if (dot > 0){
+    vel.x -= (1+BOUNCE) * dot * nx;
+    vel.y -= (1+BOUNCE) * dot * ny;
+  }
+  return {clamped: chosen.point, hit:true};
+}
+
+// ========= Rendering helpers =========
+function drawPlusTrench(ctx){
+  // Offscreen layers for horizontal and vertical trenches with rounded ends & cylindrical shading
+  const off = document.createElement('canvas');
+  off.width = off.height = SIZE*2; // generous for high-DPR
+  const ox = off.getContext('2d');
+  ox.clearRect(0,0,off.width,off.height);
+
+  function trenchLayer(isHorizontal){
+    ox.clearRect(0,0,off.width,off.height);
+    ox.save();
+    ox.scale(2,2); // match high-DPR mask resolution
+    ox.lineCap = 'round';
+    ox.lineJoin = 'round';
+    ox.strokeStyle = '#000';
+    ox.lineWidth = CHANNEL_W;
+    ox.beginPath();
+    if (isHorizontal){
+      ox.moveTo(cx-ARM_LEN/2, cy);
+      ox.lineTo(cx+ARM_LEN/2, cy);
+    } else {
+      ox.moveTo(cx, cy-ARM_LEN/2);
+      ox.lineTo(cx, cy+ARM_LEN/2);
+    }
+    ox.stroke();
+    // Convert stroke to alpha mask by using source-in with gradient fill
+    ox.globalCompositeOperation = 'source-in';
+    // Gradient across the narrow axis (simulate half-round)
+    let grad;
+    if (isHorizontal){
+      grad = ox.createLinearGradient(0, (cy-CHANNEL_W/2)*2, 0, (cy+CHANNEL_W/2)*2);
+    } else {
+      grad = ox.createLinearGradient((cx-CHANNEL_W/2)*2, 0, (cx+CHANNEL_W/2)*2, 0);
+    }
+    grad.addColorStop(0.00, 'rgba(0,0,0,0.18)');
+    grad.addColorStop(0.10, 'rgba(0,0,0,0.10)');
+    grad.addColorStop(0.50, 'rgba(0,0,0,0.22)');
+    grad.addColorStop(0.90, 'rgba(0,0,0,0.10)');
+    grad.addColorStop(1.00, 'rgba(0,0,0,0.18)');
+    ox.fillStyle = grad;
+    ox.fillRect(0,0,off.width,off.height);
+
+    // Slight inner rim for carve effect
+    ox.globalCompositeOperation = 'source-over';
+    ox.lineWidth = 2;
+    ox.strokeStyle = 'rgba(0,0,0,0.08)';
+    ox.beginPath();
+    if (isHorizontal){
+      ox.moveTo(cx-ARM_LEN/2+1, cy);
+      ox.lineTo(cx+ARM_LEN/2-1, cy);
+    } else {
+      ox.moveTo(cx, cy-ARM_LEN/2+1);
+      ox.lineTo(cx, cy+ARM_LEN/2-1);
+    }
+    ox.stroke();
+
+    const result = ox.getImageData(0,0,off.width,off.height);
+    ox.restore();
+    return result;
+  }
+
+  const horiz = trenchLayer(true);
+  const vert  = trenchLayer(false);
+
+  // Draw base slab background
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0,0,SIZE,SIZE);
+  // Subtle vignette
   const vignette = ctx.createRadialGradient(cx, cy, SIZE*0.1, cx, cy, SIZE*0.8);
   vignette.addColorStop(0, 'rgba(0,0,0,0)');
   vignette.addColorStop(1, 'rgba(0,0,0,0.06)');
   ctx.fillStyle = vignette;
   ctx.fillRect(0,0,SIZE,SIZE);
 
-  function trench(x, y, w, h, isHorizontal){
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(x, y, w, h);
-    ctx.clip();
+  // Blit layers: first horizontal normal, then vertical with multiply so intersection reads deeper
+  ctx.save();
+  ctx.drawImage(off, 0, 0, off.width, off.height, 0, 0, SIZE, SIZE);
+  ctx.globalCompositeOperation = 'multiply';
+  // Put vertical into the offscreen buffer again
+  const cv = document.createElement('canvas');
+  cv.width = off.width; cv.height = off.height;
+  const cvx = cv.getContext('2d');
+  cvx.putImageData(vert,0,0);
+  ctx.drawImage(cv, 0, 0, off.width, off.height, 0, 0, SIZE, SIZE);
+  ctx.restore();
 
-    let grad;
-    if (isHorizontal){
-      grad = ctx.createLinearGradient(0, y, 0, y+h);
-    } else {
-      grad = ctx.createLinearGradient(x, 0, x+w, 0);
-    }
-    grad.addColorStop(0.00, 'rgba(0,0,0,0.16)');
-    grad.addColorStop(0.06, 'rgba(0,0,0,0.08)');
-    grad.addColorStop(0.50, 'rgba(0,0,0,0.18)');
-    grad.addColorStop(0.94, 'rgba(0,0,0,0.08)');
-    grad.addColorStop(1.00, 'rgba(0,0,0,0.16)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(x, y, w, h);
-
-    ctx.restore();
-
-    ctx.save();
-    ctx.globalCompositeOperation = 'multiply';
-    ctx.strokeStyle = 'rgba(0,0,0,0.07)';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(x+1, y+1, w-2, h-2);
-    ctx.restore();
-  }
-
-  const half = CHANNEL_W/2;
-  trench(cx - half, 0, CHANNEL_W, SIZE, false);    // vertical
-  trench(0, cy - half, SIZE, CHANNEL_W, true);     // horizontal
-
-  g.pop();
+  // Extra depth puck at the intersection for a smooth curved look
+  const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, CHANNEL_W*0.7);
+  core.addColorStop(0.0, 'rgba(0,0,0,0.10)');
+  core.addColorStop(1.0, 'rgba(0,0,0,0.0)');
+  ctx.globalCompositeOperation = 'multiply';
+  ctx.fillStyle = core;
+  ctx.beginPath();
+  ctx.arc(cx, cy, CHANNEL_W*0.7, 0, Math.PI*2);
+  ctx.fill();
+  ctx.globalCompositeOperation = 'source-over';
 }
 
-function drawBall(g){
-  g.push();
-  g.noStroke();
-  g.fill(0, 0, 0, 80);
-  g.ellipse(pos.x, pos.y + BALL_R*0.65, BALL_R*2.2, BALL_R*0.9);
-  const ctx = g.drawingContext;
+function drawBall(ctx){
+  // Shadow
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath();
+  ctx.ellipse(pos.x, pos.y + BALL_R*0.55, BALL_R*2.1, BALL_R*0.85, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  // Body gradient
   const grad = ctx.createRadialGradient(pos.x - BALL_R*0.4, pos.y - BALL_R*0.6, BALL_R*0.2, pos.x, pos.y, BALL_R);
   grad.addColorStop(0, '#ffb3b3');
   grad.addColorStop(0.35, '#ff4d4d');
@@ -148,22 +245,42 @@ function drawBall(g){
   ctx.beginPath();
   ctx.arc(pos.x, pos.y, BALL_R, 0, Math.PI*2);
   ctx.fill();
-  g.fill(255, 255, 255, 180);
-  g.ellipse(pos.x - BALL_R*0.45, pos.y - BALL_R*0.6, BALL_R*0.5);
-  g.pop();
+  // Highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.75)';
+  ctx.beginPath();
+  ctx.arc(pos.x - BALL_R*0.45, pos.y - BALL_R*0.6, BALL_R*0.25, 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
 }
 
 // ========= p5 Sketch =========
+let pg; // p5 graphics (we'll use underlying 2D ctx)
 function setup(){
+  computeSize();
+  recomputeDerived();
   const c = createCanvas(SIZE, SIZE);
   c.parent('wrap');
-  pixelDensity(2);
+  pixelDensity(Math.min(2, window.devicePixelRatio || 1));
+  pos = {x: cx, y: cy};
   initOverlay();
+  window.addEventListener('resize', onResize);
+}
+
+function onResize(){
+  const oldSize = SIZE;
+  computeSize();
+  recomputeDerived();
+  resizeCanvas(SIZE, SIZE);
+  // Keep ball relative position
+  const scale = SIZE/oldSize;
+  pos.x *= scale; pos.y *= scale;
 }
 
 function draw(){
-  drawChannel(this);
+  const ctx = this.drawingContext;
+  drawPlusTrench(ctx);
 
+  // Acceleration from sensors + keys
   let ax = 0, ay = 0;
   if (usingOrientation){ ax += acc.x; ay += acc.y; }
   ax += keyAccel.x * 0.6; ay += keyAccel.y * 0.6;
@@ -172,12 +289,14 @@ function draw(){
   vel.x *= FRICTION; vel.y *= FRICTION;
 
   let next = { x: pos.x + vel.x, y: pos.y + vel.y };
-  next = clampToChannel(next);
-  next.x = Math.max(BALL_R, Math.min(SIZE - BALL_R, next.x));
-  next.y = Math.max(BALL_R, Math.min(SIZE - BALL_R, next.y));
-  pos = next;
+  const res = unionCapsulesClamp(next);
+  pos = res.clamped;
 
-  drawBall(this);
+  // Keep fully inside canvas
+  pos.x = Math.max(BALL_R, Math.min(SIZE - BALL_R, pos.x));
+  pos.y = Math.max(BALL_R, Math.min(SIZE - BALL_R, pos.y));
+
+  drawBall(ctx);
   debugOut();
 }
 
@@ -223,7 +342,6 @@ function initOverlay(){
   const needsPerm = typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function';
   const btn = document.getElementById('ovBtn');
   btn.addEventListener('click', askPermission, {once:true});
-
   if (isIOS && needsPerm){
     setOverlayMode('permission');
   } else {
@@ -278,11 +396,12 @@ function updateKeyAccel(){
 window.addEventListener('keydown', (e)=>{ if (e.key in KEYS){ KEYS[e.key]=true; updateKeyAccel(); }});
 window.addEventListener('keyup',   (e)=>{ if (e.key in KEYS){ KEYS[e.key]=false; updateKeyAccel(); }});
 
-// ========= Utilities =========
+// ========= Debug =========
 function debugOut(){
   const el = document.getElementById('dbg');
   el.hidden = false;
-  el.textContent = `perm:${havePermission} orient:${usingOrientation}
+  el.textContent = `size:${SIZE} ch:${CHANNEL_W} r:${BALL_R}
+perm:${havePermission} orient:${usingOrientation}
 β:${lastBeta.toFixed(1)} γ:${lastGamma.toFixed(1)}
 ax:${acc.x.toFixed(3)} ay:${acc.y.toFixed(3)}`;
 }
