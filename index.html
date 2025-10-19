@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover" />
+  <title>Maze Tilt Test · JJQAD</title>
+  <!-- iOS web-app friendly bits -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Maze Tilt Test" />
+  <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'><rect width='128' height='128' fill='white'/><circle cx='64' cy='64' r='44' fill='red'/></svg>">
+  <style>
+    :root{color-scheme:light dark}
+    html,body{height:100%;margin:0}
+    body{display:grid;place-items:center;background:#f5f5f7;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+    #wrap{position:relative}
+    canvas{display:block;border-radius:24px;box-shadow:0 10px 30px rgba(0,0,0,.12),0 1px 2px rgba(0,0,0,.15)}
+    /* overlay for permission / instructions */
+    .overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:auto}
+    .card{backdrop-filter:blur(8px);background:rgba(255,255,255,.8);border:1px solid rgba(0,0,0,.08);border-radius:16px;padding:18px 20px;max-width:80%;text-align:center;box-shadow:0 6px 20px rgba(0,0,0,.12)}
+    .btn{appearance:none;border:0;border-radius:12px;padding:12px 16px;font-weight:600;cursor:pointer}
+    .btn-primary{background:#111;color:#fff}
+    .muted{font-size:.9rem;opacity:.7;margin-top:8px}
+    @media (prefers-color-scheme:dark){
+      body{background:#0f1114}
+      .card{background:rgba(20,22,26,.65);color:#eaeef2;border-color:rgba(255,255,255,.1)}
+      .btn-primary{background:#e11d48}
+    }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.3/p5.min.js" integrity="sha512-9Vj1ZsO9e0m1TQikbe7+Y5xj9YkX5qvXvW9Q1b8cVBkP0VQzI5zEhp2kz0pLk0w8mVwV6G6Xk0K7d0k8E2k7EQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+</head>
+<body>
+  <div id="wrap">
+    <!-- p5 injects the canvas here -->
+    <div id="permission" class="overlay" hidden>
+      <div class="card">
+        <div style="font-size:1.1rem;font-weight:700;margin-bottom:8px">Enable tilt controls</div>
+        <div>On iPhone/iPad, Apple requires permission to read motion sensors.</div>
+        <button class="btn btn-primary" id="askBtn" style="margin-top:12px">Enable Tilt</button>
+        <div class="muted">(Desktop: use arrow keys to test)</div>
+      </div>
+    </div>
+    <div id="info" class="overlay" style="pointer-events:none;" hidden>
+      <div class="card" style="padding:10px 12px"><span id="hint">Tilt to roll</span></div>
+    </div>
+  </div>
+
+<script>
+// ========= Config =========
+const SIZE = 800;             // canvas is 800 × 800 px
+const CHANNEL_W = 140;        // visual width of carved channel
+const BALL_R = 14;            // ball radius
+const GRAVITY = 0.33;         // acceleration scale from tilt
+const FRICTION = 0.992;       // surface friction (velocity damping)
+const BOUNCE = 0.2;           // restitution when hitting channel walls
+
+let cx = SIZE/2, cy = SIZE/2;
+let pos = {x: cx, y: cy};
+let vel = {x: 0, y: 0};
+let acc = {x: 0, y: 0};
+
+let usingOrientation = false;
+let havePermission = false;
+let keyAccel = {x:0, y:0};
+
+// ========= Helpers =========
+function clampToChannel(p){
+  // Keep the ball center within the plus-shaped channel formed by two strips
+  const half = CHANNEL_W/2;
+  const dx = p.x - cx;
+  const dy = p.y - cy;
+  const insideH = Math.abs(dy) <= half; // within horizontal strip
+  const insideV = Math.abs(dx) <= half; // within vertical strip
+
+  if (insideH || insideV) return p; // allowed
+
+  // Outside both: clamp to nearest strip boundary
+  const penX = Math.abs(dx) - half;
+  const penY = Math.abs(dy) - half;
+  if (penX < penY){
+    p.x = cx + Math.sign(dx) * half;
+    vel.x *= -BOUNCE;
+  } else {
+    p.y = cy + Math.sign(dy) * half;
+    vel.y *= -BOUNCE;
+  }
+  return p;
+}
+
+function drawChannel(g){
+  const ctx = g.drawingContext;
+  g.push();
+  // Base slab
+  g.background('#ffffff');
+
+  // Subtle global vignette for depth
+  const vignette = ctx.createRadialGradient(cx, cy, SIZE*0.1, cx, cy, SIZE*0.8);
+  vignette.addColorStop(0, 'rgba(0,0,0,0)');
+  vignette.addColorStop(1, 'rgba(0,0,0,0.06)');
+  ctx.fillStyle = vignette;
+  ctx.fillRect(0,0,SIZE,SIZE);
+
+  // Function to draw a single trench strip with cylindrical shading
+  function trench(x, y, w, h, isHorizontal){
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+
+    // Gradient across the narrow dimension to simulate a half-round carve
+    let grad;
+    if (isHorizontal){
+      grad = ctx.createLinearGradient(0, y, 0, y+h);
+    } else {
+      grad = ctx.createLinearGradient(x, 0, x+w, 0);
+    }
+    // edge highlight → mid dark → edge highlight
+    grad.addColorStop(0.00, 'rgba(0,0,0,0.16)');
+    grad.addColorStop(0.06, 'rgba(0,0,0,0.08)');
+    grad.addColorStop(0.50, 'rgba(0,0,0,0.18)'); // darkest in center
+    grad.addColorStop(0.94, 'rgba(0,0,0,0.08)');
+    grad.addColorStop(1.00, 'rgba(0,0,0,0.16)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(x, y, w, h);
+
+    // Top rim highlight and inner shadow for the carved look (emboss effect)
+    ctx.restore();
+
+    // Outer subtle rim (lighter top-left, darker bottom-right) for relief illusion
+    ctx.save();
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.strokeStyle = 'rgba(0,0,0,0.07)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x+1, y+1, w-2, h-2);
+    ctx.restore();
+  }
+
+  // Draw vertical and horizontal trenches (they will overlap at center for a deeper look)
+  const half = CHANNEL_W/2;
+  trench(cx - half, 0, CHANNEL_W, SIZE, false);    // vertical
+  trench(0, cy - half, SIZE, CHANNEL_W, true);     // horizontal
+
+  g.pop();
+}
+
+function drawBall(g){
+  // Shadow (ellipse squished under ball, dark in trench center)
+  g.push();
+  const toCenter = Math.max(0, 1 - (Math.hypot(pos.x-cx, pos.y-cy) / (SIZE*0.75)));
+  g.noStroke();
+  g.fill(0, 0, 0, 40 + 40*toCenter);
+  g.ellipse(pos.x, pos.y + BALL_R*0.65, BALL_R*2.2, BALL_R*0.9);
+  
+  // Ball body with radial gradient via offscreen canvas trick
+  const ctx = g.drawingContext;
+  const grad = ctx.createRadialGradient(pos.x - BALL_R*0.4, pos.y - BALL_R*0.6, BALL_R*0.2, pos.x, pos.y, BALL_R);
+  grad.addColorStop(0, '#ffb3b3');
+  grad.addColorStop(0.35, '#ff4d4d');
+  grad.addColorStop(1, '#b10818');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(pos.x, pos.y, BALL_R, 0, Math.PI*2);
+  ctx.fill();
+
+  // Small specular highlight
+  g.fill(255, 255, 255, 180);
+  g.noStroke();
+  g.ellipse(pos.x - BALL_R*0.45, pos.y - BALL_R*0.6, BALL_R*0.5);
+  g.pop();
+}
+
+// ========= p5 Sketch =========
+function setup(){
+  const c = createCanvas(SIZE, SIZE);
+  c.parent('wrap');
+  pixelDensity(2);
+
+  // Show the permission overlay on iOS 13+ and friends
+  maybeShowPermissionOverlay();
+
+  // Desktop hint
+  const hint = document.getElementById('hint');
+  if (!isMobile()){ hint.textContent = 'Use arrow keys to roll'; }
+}
+
+function draw(){
+  drawChannel(this);
+
+  // Physics integration
+  // Acceleration from orientation + keys
+  let ax = 0, ay = 0;
+  if (usingOrientation){ ax += acc.x; ay += acc.y; }
+  // keyboard fallback
+  ax += keyAccel.x * 0.6; ay += keyAccel.y * 0.6;
+
+  vel.x += ax; vel.y += ay;
+  vel.x *= FRICTION; vel.y *= FRICTION;
+
+  let next = { x: pos.x + vel.x, y: pos.y + vel.y };
+  next = clampToChannel(next);
+
+  // Keep entirely within canvas (soft walls)
+  next.x = Math.max(BALL_R, Math.min(SIZE - BALL_R, next.x));
+  next.y = Math.max(BALL_R, Math.min(SIZE - BALL_R, next.y));
+
+  pos = next;
+
+  drawBall(this);
+}
+
+// ========= Device Orientation Handling =========
+function handleOrientation(e){
+  // gamma: left-right tilt (-90 .. 90). Positive when right side is down on most devices
+  // beta: front-back tilt (-180 .. 180). Positive when top edge is up (tilted toward the user)
+  const g = e.gamma || 0;
+  const b = e.beta || 0;
+  // Map to acceleration components. Scale with sine so near-flat is gentle.
+  acc.x = GRAVITY * Math.sin(g * Math.PI/180);
+  acc.y = GRAVITY * Math.sin(b * Math.PI/180);
+}
+
+function askPermission(){
+  const overlay = document.getElementById('permission');
+  if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function'){
+    DeviceOrientationEvent.requestPermission().then(state => {
+      if (state === 'granted'){
+        havePermission = true;
+        startOrientation();
+        overlay.hidden = true;
+        document.getElementById('info').hidden = false;
+      } else {
+        // user denied; keep keyboard fallback
+        overlay.hidden = true;
+        document.getElementById('info').hidden = false;
+      }
+    }).catch(() => {
+      overlay.hidden = true;
+      document.getElementById('info').hidden = false;
+    });
+  } else {
+    // non-iOS; start immediately
+    startOrientation();
+    overlay.hidden = true;
+    document.getElementById('info').hidden = false;
+  }
+}
+
+function startOrientation(){
+  window.addEventListener('deviceorientation', handleOrientation, true);
+  usingOrientation = true;
+}
+
+function maybeShowPermissionOverlay(){
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const needsPerm = typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function';
+  const overlay = document.getElementById('permission');
+  const info = document.getElementById('info');
+  const btn = document.getElementById('askBtn');
+  btn.onclick = askPermission;
+  if (isIOS && needsPerm){
+    overlay.hidden = false;
+  } else {
+    info.hidden = false;
+    startOrientation();
+  }
+}
+
+// ========= Keyboard fallback =========
+const KEYS = {ArrowLeft:false, ArrowRight:false, ArrowUp:false, ArrowDown:false};
+function updateKeyAccel(){
+  keyAccel.x = (KEYS.ArrowRight?1:0) - (KEYS.ArrowLeft?1:0);
+  keyAccel.y = (KEYS.ArrowDown?1:0) - (KEYS.ArrowUp?1:0);
+}
+window.addEventListener('keydown', (e)=>{ if (e.key in KEYS){ KEYS[e.key]=true; updateKeyAccel(); }});
+window.addEventListener('keyup',   (e)=>{ if (e.key in KEYS){ KEYS[e.key]=false; updateKeyAccel(); }});
+
+// ========= Utilities =========
+function isMobile(){
+  return /Android|iPhone|iPad|iPod|IEMobile|Opera Mini/i.test(navigator.userAgent);
+}
+</script>
+</body>
+</html>
