@@ -149,44 +149,68 @@ function drawPlusFlat(ctx){
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0,0,SIZE,SIZE);
 
-  // Draw cross
+  // Base cross: equal arms with rounded ends
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.lineWidth = CHANNEL_W;
   ctx.strokeStyle = '#d7d7db';
 
-  // horizontal
+  // horizontal arm
   ctx.beginPath();
   ctx.moveTo(cx - ARM_LEN/2, cy);
   ctx.lineTo(cx + ARM_LEN/2, cy);
   ctx.stroke();
 
-  // vertical
+  // vertical arm
   ctx.beginPath();
   ctx.moveTo(cx, cy - ARM_LEN/2);
   ctx.lineTo(cx, cy + ARM_LEN/2);
   ctx.stroke();
   ctx.restore();
 
-  // Carve inner fillets (concave rounding) by overdrawing in background color
+  // Cut true inner fillets (quarter-circle subtraction), not whole circles
+  const r = CHANNEL_W/2;
+  const f = FILLET; // fillet radius
   ctx.save();
-  ctx.fillStyle = '#ffffff';
-  const offset = (CHANNEL_W/2) - FILLET;
-  const centers = [
-    {x: cx - offset, y: cy - offset},
-    {x: cx + offset, y: cy - offset},
-    {x: cx - offset, y: cy + offset},
-    {x: cx + offset, y: cy + offset},
-  ];
-  for (const c of centers){
-    ctx.beginPath();
-    ctx.arc(c.x, c.y, FILLET, 0, Math.PI*2);
-    ctx.fill();
-  }
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.fillStyle = '#000';
+
+  // Top-left corner fillet
+  let cx0 = cx - (r - f), cy0 = cy - (r - f);
+  ctx.beginPath();
+  ctx.moveTo(cx0, cy0);
+  ctx.arc(cx0, cy0, f, 0, Math.PI/2, false); // 0 → 90° (right to down)
+  ctx.closePath();
+  ctx.fill();
+
+  // Top-right
+  cx0 = cx + (r - f); cy0 = cy - (r - f);
+  ctx.beginPath();
+  ctx.moveTo(cx0, cy0);
+  ctx.arc(cx0, cy0, f, Math.PI/2, Math.PI, false); // 90° → 180° (down to left)
+  ctx.closePath();
+  ctx.fill();
+
+  // Bottom-left
+  cx0 = cx - (r - f); cy0 = cy + (r - f);
+  ctx.beginPath();
+  ctx.moveTo(cx0, cy0);
+  ctx.arc(cx0, cy0, f, 1.5*Math.PI, 2*Math.PI, false); // 270° → 360° (up to right)
+  ctx.closePath();
+  ctx.fill();
+
+  // Bottom-right
+  cx0 = cx + (r - f); cy0 = cy + (r - f);
+  ctx.beginPath();
+  ctx.moveTo(cx0, cy0);
+  ctx.arc(cx0, cy0, f, Math.PI, 1.5*Math.PI, false); // 180° → 270° (left to up)
+  ctx.closePath();
+  ctx.fill();
+
   ctx.restore();
 
-  // Re-stroke thin edge to keep crisp outline (optional)
+  // Optional hairline re-stroke for crispness
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
@@ -202,6 +226,13 @@ function drawPlusFlat(ctx){
 }
 
 function drawBall(ctx){
+  ctx.save();
+  ctx.fillStyle = '#e11d48';
+  ctx.beginPath();
+  ctx.arc(pos.x, pos.y, BALL_R, 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+}(ctx){
   ctx.save();
   ctx.fillStyle = '#e11d48';
   ctx.beginPath();
