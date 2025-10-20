@@ -9,9 +9,9 @@
   <meta name="apple-mobile-web-app-title" content="Tilt Maze" />
   <style>
     :root{color-scheme:light dark}
-    html,body{height:100%;margin:0}
+    html,body{height:100dvh;margin:0}
     body{display:flex;align-items:center;justify-content:center;background:#f5f5f7;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
-    #wrap{position:relative;width:100vw;height:100vh;display:flex;align-items:center;justify-content:center}
+    #wrap{position:relative;width:100vw;height:100dvh;display:flex;align-items:center;justify-content:center}
     canvas{display:block;border-radius:24px;box-shadow:0 10px 30px rgba(0,0,0,.12),0 1px 2px rgba(0,0,0,.15)}
 
     /* Overlays */
@@ -56,6 +56,14 @@
       <div class="card">
         <div class="title">Congratulations!</div>
         <div class="sub">Want another?</div>
+        <div>
+          <button class="btn" id="againEasy">Easy</button>
+          <button class="btn" id="againMed">Medium</button>
+          <button class="btn" id="againHard">Hard</button>
+        </div>
+      </div>
+    </div>
+        <div class="sub">Want another?</div>
         <button class="btn" id="againBtn">Yes</button>
       </div>
     </div>
@@ -66,7 +74,7 @@
   </div>
 
 <script>
-const VERSION = 'v2025-10-19c';
+const VERSION = 'v2025-10-20a';
 
 // =================== Responsive sizing (full-screen) ===================
 let CAN_W = 400, CAN_H = 700; // full screen canvas
@@ -77,7 +85,9 @@ let cellSize;          // maze cell size (px)
 let PATH_W;            // visual path width
 let BALL_R;            // ball radius
 let GOAL_R;            // goal dot radius (50% of ball)
-let level = 1;         // increases after each solve
+let level = 1;
+let difficulty = 'medium'; // 'easy' | 'medium' | 'hard'
+$1
 
 // physics
 const GRAVITY = 0.32;
@@ -103,59 +113,64 @@ function isIOS(){ return /iPad|iPhone|iPod/.test(navigator.userAgent) || (naviga
 
 // =================== Maze generation (Wilson's Algorithm) ===================
 function generateMaze(cols, rows){
-  const N=rows, M=cols;
-  const inTree = Array.from({length:N},()=>Array(M).fill(false));
-  const si = Math.floor(Math.random()*N), sj=Math.floor(Math.random()*M);
-  inTree[si][sj]=true;
-  const dirs=[[1,0],[ -1,0],[0,1],[0,-1]];
-  const next = (i,j)=>{
-    const options=[]; for(const [dx,dy] of dirs){ const ni=i+dy, nj=j+dx; if(ni>=0&&nj>=0&&ni<N&&nj<M) options.push([ni,nj]); }
-    return options[Math.floor(Math.random()*options.length)];
-  };
-  const parent = Array.from({length:N},()=>Array(M).fill(null));
-
-  while(true){
-    let ui=-1, uj=-1; outer: for(let i=0;i<N;i++) for(let j=0;j<M;j++){ if(!inTree[i][j]){ ui=i; uj=j; break outer; } }
-    if(ui===-1) break;
-    const visited = new Map();
-    let ci=ui, cj=uj; visited.set(ci+","+cj, null);
+  const H=rows, W=cols;
+  const inTree = Array.from({length:H},()=>Array(W).fill(false));
+  const dirs = [[1,0],[ -1,0],[0,1],[0,-1]];
+  const neighbors = (i,j)=>{ const out=[]; for(const [dx,dy] of dirs){ const ni=i+dy, nj=j+dx; if(ni>=0&&nj>=0&&ni<H&&nj<W) out.push([ni,nj]); } return out; };
+  // seed
+  const si = Math.floor(Math.random()*H), sj=Math.floor(Math.random()*W); inTree[si][sj]=true;
+  const parent = Array.from({length:H},()=>Array(W).fill(null));
+  const total = H*W; let added = 1;
+  while(added < total){
+    let ui, uj; do { ui=Math.floor(Math.random()*H); uj=Math.floor(Math.random()*W);} while(inTree[ui][uj]);
+    const path=[]; const index=new Map();
+    let ci=ui, cj=uj; path.push([ci,cj]); index.set(ci+','+cj,0);
     while(!inTree[ci][cj]){
-      const [ni,nj]=next(ci,cj);
-      const key=ni+","+nj;
-      if(visited.has(key)){
-        for(const k of Array.from(visited.keys())){ if(k===key) break; visited.delete(k); }
+      const opts = neighbors(ci,cj);
+      const [ni,nj] = opts[Math.floor(Math.random()*opts.length)];
+      const key = ni+','+nj;
+      if(index.has(key)){
+        const cut = index.get(key);
+        path.length = cut+1; // loop erase
+      } else {
+        path.push([ni,nj]); index.set(key, path.length-1);
       }
-      visited.set(key, ci+","+cj);
       ci=ni; cj=nj;
     }
-    for(const [k,v] of visited){ const [ii,jj]=k.split(',').map(Number); inTree[ii][jj]=true; parent[ii][jj]=v; }
+    for(let k=0;k<path.length-1;k++){
+      const [a1,b1]=path[k], [a2,b2]=path[k+1];
+      if(!inTree[a1][b1]){ inTree[a1][b1]=true; added++; parent[a1][b1]=a2+','+b2; }
+      if(!inTree[a2][b2]){ inTree[a2][b2]=true; added++; parent[a2][b2]=a1+','+b1; }
+    }
   }
-
   const passages = new Set();
-  for(let i=0;i<N;i++) for(let j=0;j<M;j++){
+  for(let i=0;i<H;i++) for(let j=0;j<W;j++){
     const p = parent[i][j]; if(!p) continue; const [pi,pj]=p.split(',').map(Number);
     const a=`${i},${j}`, b=`${pi},${pj}`; passages.add(a+"-"+b); passages.add(b+"-"+a);
   }
-
-  // pick far endpoints
-  function cellToIdx(i,j){ return i*M + j; }
-  const adj = Array.from({length:N*M},()=>[]);
-  for(let i=0;i<N;i++)for(let j=0;j<M;j++){
+  function cellToIdx(i,j){ return i*W + j; }
+  const adj = Array.from({length:H*W},()=>[]);
+  for(let i=0;i<H;i++)for(let j=0;j<W;j++){
     const id=cellToIdx(i,j);
-    for(const [dx,dy] of dirs){ const ni=i+dy,nj=j+dx; if(ni<0||nj<0||ni>=N||nj>=M) continue; if(passages.has(`${i},${j}-${ni},${nj}`)) adj[id].push(cellToIdx(ni,nj)); }
+    for(const [dx,dy] of dirs){ const ni=i+dy,nj=j+dx; if(ni<0||nj<0||ni>=H||nj>=W) continue; if(passages.has(`${i},${j}-${ni},${nj}`)) adj[id].push(cellToIdx(ni,nj)); }
   }
-  function bfs(start){ const dist=Array(N*M).fill(Infinity); dist[start]=0; const q=[start]; while(q.length){ const v=q.shift(); for(const w of adj[v]) if(dist[w]===Infinity){ dist[w]=dist[v]+1; q.push(w);} } return dist; }
+  function bfs(start){ const dist=Array(H*W).fill(Infinity); dist[start]=0; const q=[start]; while(q.length){ const v=q.shift(); for(const w of adj[v]) if(dist[w]===Infinity){ dist[w]=dist[v]+1; q.push(w);} } return dist; }
   const s0=0, d0=bfs(s0); let a=0; for(let k=0;k<d0.length;k++) if(d0[k]>d0[a]) a=k; const d1=bfs(a); let b=0; for(let k=0;k<d1.length;k++) if(d1[k]>d1[b]) b=k;
-  const ai=Math.floor(a/M), aj=a%M, bi=Math.floor(b/M), bj=b%M;
-  return {passages, start:{i:ai,j:aj}, end:{i:bi,j:bj}, cols:M, rows:N};
+  const ai=Math.floor(a/W), aj=a%W, bi=Math.floor(b/W), bj=b%W;
+  return {passages, start:{i:ai,j:aj}, end:{i:bi,j:bj}, cols:W, rows:H};
 }
 
 function buildMazeGeometry(){
-  // choose grid based on level and screen (full-screen, with 1-cell margin)
-  const cellsAcross = Math.max(16, Math.floor(CAN_W / Math.max(40, 56 - level*2)));
-  const cellsDown   = Math.max(16, Math.floor(CAN_H / Math.max(40, 56 - level*2)));
-  gridW = cellsAcross; gridH = cellsDown;
-  cellSize = Math.min(Math.floor(CAN_W / (gridW + 2)), Math.floor(CAN_H / (gridH + 2)));
+  // Difficulty → target cell size (px)
+  const target = (difficulty==='easy') ? 54 : (difficulty==='hard' ? 28 : 36);
+  cellSize = Math.max(18, target - Math.max(0, level-1));
+  gridW = Math.max(8, Math.floor(CAN_W / cellSize) - 2);
+  gridH = Math.max(8, Math.floor(CAN_H / cellSize) - 2);
+  // Refit to exactly fill with uniform square cells and ~1-cell margin
+  cellSize = Math.floor(Math.min(CAN_W / (gridW + 2), CAN_H / (gridH + 2)));
+  const offsetX = Math.floor((CAN_W - (gridW+2)*cellSize)/2);
+  const offsetY = Math.floor((CAN_H - (gridH+2)*cellSize)/2);
+
   PATH_W = Math.floor(cellSize * 0.56);
   BALL_R = Math.floor(PATH_W * 0.45);
   GOAL_R = Math.floor(BALL_R * 0.5);
@@ -165,8 +180,6 @@ function buildMazeGeometry(){
 
   mazeEdges = [];
   function cellCenter(i,j){
-    const offsetX = Math.floor((CAN_W - (gridW+2)*cellSize)/2);
-    const offsetY = Math.floor((CAN_H - (gridH+2)*cellSize)/2);
     const x = cellSize*(j+1) + cellSize/2 + offsetX;
     const y = cellSize*(i+1) + cellSize/2 + offsetY;
     return {x,y};
@@ -188,17 +201,18 @@ function buildMazeGeometry(){
 }
 
 function buildCollisionMask(){
-  // Build eroded mask for BALL CENTER to guarantee the ball never overlaps path edges
+  // Eroded mask for BALL CENTER (no edge bleed)
   const cCanvas = document.createElement('canvas');
   cCanvas.width = CAN_W; cCanvas.height = CAN_H;
   const cctx = cCanvas.getContext('2d');
   cctx.clearRect(0,0,CAN_W,CAN_H);
   cctx.fillStyle='#000'; cctx.fillRect(0,0,CAN_W,CAN_H);
   cctx.lineCap='round'; cctx.lineJoin='round';
-  const eroded = Math.max(1, PATH_W - 2*BALL_R + 2); // +2 px safety to avoid numerical gaps
-  cctx.lineWidth = eroded;
-  cctx.strokeStyle='#fff';
+  const eroded = Math.max(1, PATH_W - 2*BALL_R + 2);
+  cctx.lineWidth = eroded; cctx.strokeStyle='#fff';
   for(const [A,B] of mazeEdges){ cctx.beginPath(); cctx.moveTo(A.x, A.y); cctx.lineTo(B.x, B.y); cctx.stroke(); }
+  centerMask = cctx.getImageData(0,0,CAN_W,CAN_H).data;
+} 
   centerMask = cctx.getImageData(0,0,CAN_W,CAN_H).data;
 }
 
@@ -305,13 +319,18 @@ function showCongrats(){
   const cg = document.getElementById('congrats');
   cg.classList.remove('hidden');
   cg.classList.remove('fade-out');
-  const again = document.getElementById('againBtn');
-  again.onclick = ()=>{
+  const hook = (d)=>()=>{
+    difficulty = d; level = 1;
     cg.classList.add('fade-out');
     cg.addEventListener('transitionend', ()=>{
       cg.classList.add('hidden');
-      nextLevel();
+      buildMazeGeometry(); solved=false;
     }, {once:true});
+  };
+  document.getElementById('againEasy').onclick = hook('easy');
+  document.getElementById('againMed').onclick  = hook('medium');
+  document.getElementById('againHard').onclick = hook('hard');
+}, {once:true});
   };
 }
 
