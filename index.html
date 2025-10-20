@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover" />
-  <title>Maze Tilt Test · JJQAD</title>
+  <title>Tilt Maze · JJQAD</title>
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="Maze Tilt Test" />
+  <meta name="apple-mobile-web-app-title" content="Tilt Maze" />
   <style>
     :root{color-scheme:light dark}
     html,body{height:100%;margin:0}
@@ -14,21 +14,26 @@
     #wrap{position:relative;width:100vw;height:100vh;display:flex;align-items:center;justify-content:center}
     canvas{display:block;border-radius:24px;box-shadow:0 10px 30px rgba(0,0,0,.12),0 1px 2px rgba(0,0,0,.15)}
 
-    .overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:10;opacity:1;transition:opacity .45s ease}
+    /* Splash / permission overlay */
+    .overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:20;opacity:1;transition:opacity .45s ease}
     .overlay.fade-out{opacity:0;pointer-events:none}
     .overlay.hidden{display:none}
-    .card{backdrop-filter:blur(8px);background:rgba(255,255,255,.9);border:1px solid rgba(0,0,0,.08);border-radius:16px;padding:18px 20px;max-width:80%;text-align:center;box-shadow:0 6px 20px rgba(0,0,0,.12)}
-    .btn{appearance:none;border:0;border-radius:12px;padding:12px 16px;font-weight:600;cursor:pointer;background:#111;color:#fff}
-    .muted{font-size:.9rem;opacity:.7;margin-top:8px}
-    .debug{position:absolute;left:10px;top:10px;z-index:20;background:rgba(0,0,0,.55);color:#fff;padding:6px 8px;border-radius:8px;font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;font-size:12px}
+    .card{backdrop-filter:blur(8px);background:rgba(255,255,255,.9);border:1px solid rgba(0,0,0,.08);border-radius:16px;padding:22px 24px;max-width:84%;text-align:center;box-shadow:0 6px 20px rgba(0,0,0,.12)}
+    .title{font-weight:800;font-size:1.6rem;letter-spacing:.2px;margin-bottom:6px}
+    .sub{opacity:.75;margin-bottom:14px}
+    .btn{appearance:none;border:0;border-radius:12px;padding:12px 16px;font-weight:700;cursor:pointer;background:#111;color:#fff}
+    .hint{font-size:.92rem;opacity:.8;margin-top:12px}
+    .tiny{font-size:.8rem;opacity:.68;margin-top:6px}
 
-    /* Portrait reminder overlay when device is in landscape */
-    #rotate{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.5);color:#fff;z-index:30;text-align:center;padding:20px}
+    /* Portrait reminder when device is landscape */
+    #rotate{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.55);color:#fff;z-index:30;text-align:center;padding:20px}
     #rotate.show{display:flex}
+
+    .debug{position:absolute;left:10px;top:10px;z-index:10;background:rgba(0,0,0,.55);color:#fff;padding:6px 8px;border-radius:8px;font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;font-size:12px}
 
     @media (prefers-color-scheme:dark){
       body{background:#0f1114}
-      .card{background:rgba(20,22,26,.8);color:#eaeef2;border-color:rgba(255,255,255,.1)}
+      .card{background:rgba(20,22,26,.86);color:#eaeef2;border-color:rgba(255,255,255,.1)}
       .btn{background:#e11d48}
     }
   </style>
@@ -36,12 +41,13 @@
 </head>
 <body>
   <div id="wrap">
-    <div id="overlay" class="overlay">
+    <div id="splash" class="overlay">
       <div class="card">
-        <div id="ovTitle" style="font-size:1.1rem;font-weight:700;margin-bottom:8px">Enable tilt controls</div>
-        <div id="ovText">On iPhone/iPad, Apple requires permission to read motion/orientation sensors.</div>
-        <button class="btn" id="ovBtn" style="margin-top:12px">Enable Tilt</button>
-        <div class="muted" id="ovHint">(Desktop: use arrow keys to test)</div>
+        <div class="title">Tilt Maze</div>
+        <div class="sub">by JJQAD</div>
+        <button class="btn" id="beginBtn">Tap to Begin</button>
+        <div class="hint">Tilt your phone to move the ball and solve the maze.</div>
+        <div class="tiny">You'll be asked to allow motion/orientation sensors.</div>
       </div>
     </div>
     <div id="rotate"><div>Rotate to portrait</div></div>
@@ -49,348 +55,286 @@
   </div>
 
 <script>
-// ========= Responsive sizing =========
-let SIZE = 400; // will be set to viewport width
+// =================== Responsive sizing ===================
+let SIZE = 400; // canvas size = viewport width (square)
 function computeSize(){
   const w = Math.min(window.innerWidth, 1024);
   SIZE = Math.floor(w);
 }
 
-// ========= Config (depend on SIZE; recompute on resize) =========
-let CHANNEL_W, BALL_R, ARM_LEN, cx, cy, FILLET;
-const GRAVITY = 0.33;
+// =================== Game config (will scale with level) ===================
+let cx, cy;            // canvas center
+let cellSize;          // maze cell size (px)
+let PATH_W;            // visual path (channel) width
+let BALL_R;            // ball radius
+let GOAL_R;            // goal dot radius (50% of ball)
+let level = 1;         // increases after each solve
+
+// physics
+const GRAVITY = 0.32;
 const FRICTION = 0.992;
-const BOUNCE = 0.2;
-
-function recomputeDerived(){
-  CHANNEL_W = Math.max(18, Math.round(SIZE * 0.175));
-  BALL_R    = Math.round((CHANNEL_W * 0.98) / 2); // 98% of channel width
-  ARM_LEN   = Math.round(SIZE * 0.78);            // length of each trench arm
-  FILLET    = Math.max(2, Math.round((CHANNEL_W/2) / 8)); // 1/8 of end radius
-  cx = SIZE/2; cy = SIZE/2;
-}
-
-// ========= Physics =========
-let pos = {x: 0, y: 0};
-let vel = {x: 0, y: 0};
-let acc = {x: 0, y: 0};
-let usingOrientation = false;
-let havePermission = false;
-let keyAccel = {x:0, y:0};
+const BOUNCE = 0.25;
+let pos = {x:0,y:0}, vel = {x:0,y:0}, acc = {x:0,y:0};
+let usingOrientation = false, havePermission = false;
 let lastGamma = 0, lastBeta = 0;
-let overlayDismissed = false;
 
-// ========= Geometry helpers =========
-function nearestOnSegment(ax,ay,bx,by,px,py){
-  const vx = bx-ax, vy = by-ay;
-  const wx = px-ax, wy = py-ay;
-  const L2 = vx*vx+vy*vy;
-  let t = L2 ? (wx*vx+wy*vy)/L2 : 0;
-  t = Math.max(0, Math.min(1, t));
-  return {x: ax + t*vx, y: ay + t*vy, t};
-}
-function insideCapsule(p, A, B, rad){
-  const n = nearestOnSegment(A.x,A.y,B.x,B.y,p.x,p.y);
-  const dx = p.x - n.x, dy = p.y - n.y;
-  return (dx*dx + dy*dy) <= rad*rad;
-}
-function projectToCapsuleBoundary(p, A, B, rad){
-  const n = nearestOnSegment(A.x,A.y,B.x,B.y,p.x,p.y);
-  const dx = p.x - n.x, dy = p.y - n.y;
-  const d = Math.hypot(dx,dy) || 1e-6;
-  if (d <= rad) return {point:{x:p.x, y:p.y}, normal:{x:0,y:0}, dist:0};
-  const nx = dx/d, ny = dy/d;
-  return {point:{x: n.x + nx*rad, y: n.y + ny*rad}, normal:{x:nx, y:ny}, dist: d - rad};
-}
+// maze
+let gridW, gridH;        // cells across/down
+let mazeEdges = [];      // list of corridor segments (for drawing)
+let startCell, endCell;  // {i,j}
+let startPos, endPos;    // pixel positions
+let solved = false;
 
-function projectToCircle(p, Cx, Cy, rad){
-  const dx = p.x - Cx, dy = p.y - Cy;
-  const d = Math.hypot(dx,dy) || 1e-6;
-  if (d <= rad) return {point:{x:p.x,y:p.y}, normal:{x:0,y:0}, dist:0};
-  const nx = dx/d, ny = dy/d;
-  return {point:{x: Cx + nx*rad, y: Cy + ny*rad}, normal:{x:nx, y:ny}, dist: d - rad};
-}
+// offscreen collision mask
+let maskCanvas, maskCtx, maskData;
 
-function unionFilletedCrossClamp(next){
-  const half = ARM_LEN/2;
-  const r = CHANNEL_W/2;
-  const hr = r - BALL_R; // clearance for ball center
-  const f = FILLET;
+// =================== Utilities ===================
+function fadeOut(el){ el.classList.add('fade-out'); el.addEventListener('transitionend', ()=>el.classList.add('hidden'), {once:true}); }
+function isIOS(){ return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints>1); }
 
-  const horizA = {x: cx - half, y: cy};
-  const horizB = {x: cx + half, y: cy};
-  const vertA  = {x: cx, y: cy - half};
-  const vertB  = {x: cx, y: cy + half};
-
-  // Fillet circle centers (tangent to inner edges), radius expanded by hr
-  const rf = f + hr;
-  const fillets = [
-    {x: cx - r + f, y: cy - r + f}, // TL
-    {x: cx + r - f, y: cy - r + f}, // TR
-    {x: cx + r - f, y: cy + r - f}, // BR
-    {x: cx - r + f, y: cy + r - f}, // BL
-  ];
-
-  // Quick inside checks (capsules or any fillet circle)
-  const insideH = insideCapsule(next, horizA, horizB, hr);
-  const insideV = insideCapsule(next, vertA,  vertB,  hr);
-  let insideF = false;
-  for (const c of fillets){
-    if (Math.hypot(next.x - c.x, next.y - c.y) <= rf){ insideF = true; break; }
+// =================== Maze generation (Randomized Prim) ===================
+function generateMaze(cols, rows){
+  // Prim on cell graph with 4-neighborhood
+  const N=rows, M=cols;
+  const inMST = Array.from({length:N},()=>Array(M).fill(false));
+  const edges=[]; // frontier edges: [i,j,dir]
+  const dirs=[[1,0,'R'],[-1,0,'L'],[0,1,'D'],[0,-1,'U']];
+  function pushEdges(i,j){
+    for(const [dx,dy,tag] of dirs){
+      const ni=i+dy, nj=j+dx; // careful: i=row(y), j=col(x)
+      if(ni>=0&&ni<N&&nj>=0&&nj<M&&!inMST[ni][nj]) edges.push([i,j,ni,nj]);
+    }
   }
-  if (insideH || insideV || insideF) return {clamped: next, hit:false};
+  // seed
+  const si = Math.floor(Math.random()*N), sj = Math.floor(Math.random()*M);
+  inMST[si][sj]=true; pushEdges(si,sj);
+  const passages = new Set(); // key as "i,j -> ni,nj"
 
-  // Otherwise clamp to nearest boundary among two capsules and four fillet circles
-  const candidates = [];
-  candidates.push(projectToCapsuleBoundary(next, horizA, horizB, hr));
-  candidates.push(projectToCapsuleBoundary(next, vertA,  vertB,  hr));
-  for (const c of fillets){
-    candidates.push(projectToCircle(next, c.x, c.y, rf));
+  while(edges.length){
+    const k = Math.floor(Math.random()*edges.length);
+    const [i,j,ni,nj]=edges.splice(k,1)[0];
+    if(inMST[ni][nj] && inMST[i][j]) continue;
+    const ai = inMST[i][j]? i:ni, aj=inMST[i][j]? j:nj;
+    const bi = inMST[i][j]? ni:i, bj=inMST[i][j]? nj:j;
+    inMST[bi][bj]=true; pushEdges(bi,bj);
+    passages.add(`${ai},${aj}-${bi},${bj}`);
+    passages.add(`${bi},${bj}-${ai},${aj}`);
   }
-  let chosen = candidates[0];
-  for (let i=1;i<candidates.length;i++) if (candidates[i].dist < chosen.dist) chosen = candidates[i];
 
-  // Reflect velocity along chosen normal (gentle bounce)
-  const nx = chosen.normal.x, ny = chosen.normal.y;
-  const dot = vel.x*nx + vel.y*ny;
-  if (dot > 0){
-    vel.x -= (1+BOUNCE) * dot * nx;
-    vel.y -= (1+BOUNCE) * dot * ny;
+  // compute farthest endpoints via BFS distances
+  function cellToIdx(i,j){ return i*M + j; }
+  const adj = Array.from({length:N*M},()=>[]);
+  for(let i=0;i<N;i++)for(let j=0;j<M;j++){
+    const id=cellToIdx(i,j);
+    for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){
+      const ni=i+dy,nj=j+dx; if(ni<0||nj<0||ni>=N||nj>=M) continue;
+      if(passages.has(`${i},${j}-${ni},${nj}`)) adj[id].push(cellToIdx(ni,nj));
+    }
   }
-  return {clamped: chosen.point, hit:true};
+  function bfs(start){
+    const dist=Array(N*M).fill(Infinity); dist[start]=0; const q=[start];
+    while(q.length){
+      const v=q.shift();
+      for(const w of adj[v]) if(dist[w]===Infinity){ dist[w]=dist[v]+1; q.push(w);} }
+    return dist;
+  }
+  const s0 = 0; // arbitrary start
+  const d0 = bfs(s0);
+  let a=0; for(let k=0;k<d0.length;k++) if(d0[k]>d0[a]) a=k;
+  const d1=bfs(a); let b=0; for(let k=0;k<d1.length;k++) if(d1[k]>d1[b]) b=k;
+  const ai=Math.floor(a/M), aj=a%M, bi=Math.floor(b/M), bj=b%M;
+
+  // store edges as pixel segments later
+  return {passages, start:{i:ai,j:aj}, end:{i:bi,j:bj}, cols:M, rows:N};
 }
 
-// ========= Rendering (flat, with inner fillets) =========
-function drawPlusFlat(ctx){
-  // Background
-  ctx.clearRect(0,0,SIZE,SIZE);
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0,0,SIZE,SIZE);
+function buildMazeGeometry(){
+  // choose grid based on level/size
+  const base = Math.max(8, Math.floor(SIZE/Math.max(44, 54 - level*3))); // heuristic
+  gridW = base; gridH = base; // square grid
+  cellSize = Math.floor(SIZE / (gridW + 2)); // padding 1 cell around
+  PATH_W = Math.floor(cellSize * 0.56);
+  BALL_R = Math.floor(PATH_W * 0.45); // keep some clearance
+  GOAL_R = Math.floor(BALL_R * 0.5);
+  cx = SIZE/2; cy = SIZE/2;
 
-  // Base cross: equal arms with rounded ends
-  ctx.save();
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.lineWidth = CHANNEL_W;
-  ctx.strokeStyle = '#d7d7db';
+  const m = generateMaze(gridW, gridH);
+  startCell = m.start; endCell = m.end;
 
-  // horizontal arm
-  ctx.beginPath();
-  ctx.moveTo(cx - ARM_LEN/2, cy);
-  ctx.lineTo(cx + ARM_LEN/2, cy);
-  ctx.stroke();
-
-  // vertical arm
-  ctx.beginPath();
-  ctx.moveTo(cx, cy - ARM_LEN/2);
-  ctx.lineTo(cx, cy + ARM_LEN/2);
-  ctx.stroke();
-  ctx.restore();
-
-  // Carve true inner fillets using your construction:
-  // draw a circle tangent to the inner stroke lines (radius f) and subtract
-  const r = CHANNEL_W/2;      // half channel width
-  const f = FILLET;           // fillet radius (1/8 of end radius)
-  ctx.save();
-  ctx.globalCompositeOperation = 'destination-out';
-  ctx.fillStyle = '#000';
-
-  // Helper to cut a quarter-circle wedge centered at (cxFil, cyFil)
-  function cut(cxFil, cyFil, a0, a1){
-    ctx.beginPath();
-    ctx.moveTo(cxFil, cyFil);
-    ctx.arc(cxFil, cyFil, f, a0, a1, false);
-    ctx.closePath();
-    ctx.fill();
+  // convert passages to line segments in pixel space (centerlines)
+  mazeEdges = [];
+  function cellCenter(i,j){
+    const x = cellSize*(j+1) + cellSize/2;
+    const y = cellSize*(i+1) + cellSize/2;
+    return {x,y};
   }
-  // Centers shifted by f so the arc is tangent to inner edges
-  // TL (tangent to x=cx-r and y=cy-r)
-  cut(cx - r + f, cy - r + f, 0, Math.PI/2);
-  // TR (tangent to x=cx+r and y=cy-r)
-  cut(cx + r - f, cy - r + f, Math.PI/2, Math.PI);
-  // BR (tangent to x=cx+r and y=cy+r)
-  cut(cx + r - f, cy + r - f, Math.PI, 1.5*Math.PI);
-  // BL (tangent to x=cx-r and y=cy+r)
-  cut(cx - r + f, cy + r - f, 1.5*Math.PI, 2*Math.PI);
+  for(let i=0;i<gridH;i++) for(let j=0;j<gridW;j++){
+    const id = `${i},${j}`;
+    for(const [dx,dy] of [[1,0],[0,1]]){ // only right & down to avoid dupes
+      const ni=i+dy,nj=j+dx; if(ni>=gridH||nj>=gridW) continue;
+      const keyAB = `${i},${j}-${ni},${nj}`;
+      if(m.passages.has(keyAB)){
+        const A = cellCenter(i,j), B = cellCenter(ni,nj);
+        mazeEdges.push([A,B]);
+      }
+    }
+  }
+  startPos = cellCenter(startCell.i, startCell.j);
+  endPos   = cellCenter(endCell.i,   endCell.j);
+  pos = {x:startPos.x, y:startPos.y}; vel={x:0,y:0};
 
-  ctx.restore();
+  // build collision mask
+  buildCollisionMask();
 }
 
+function buildCollisionMask(){
+  maskCanvas = document.createElement('canvas');
+  maskCanvas.width = SIZE; maskCanvas.height = SIZE;
+  maskCtx = maskCanvas.getContext('2d');
+  maskCtx.clearRect(0,0,SIZE,SIZE);
+  // draw paths (grey on main, white on mask over black background)
+  maskCtx.fillStyle='#000'; maskCtx.fillRect(0,0,SIZE,SIZE);
+  maskCtx.lineCap='round'; maskCtx.lineJoin='round';
+  maskCtx.lineWidth = PATH_W;
+  maskCtx.strokeStyle='#fff';
+  // draw outer padding cross-connections through passages
+  for(const [A,B] of mazeEdges){
+    maskCtx.beginPath(); maskCtx.moveTo(A.x, A.y); maskCtx.lineTo(B.x, B.y); maskCtx.stroke();
+  }
+  // Start/End centers are already on paths
+  maskData = maskCtx.getImageData(0,0,SIZE,SIZE).data;
+}
+
+function pointInsidePath(x,y){
+  // sample mask (white = path)
+  const ix = Math.max(0, Math.min(SIZE-1, Math.round(x)));
+  const iy = Math.max(0, Math.min(SIZE-1, Math.round(y)));
+  const idx = (iy*SIZE + ix)*4 + 0; // read red
+  return maskData[idx] > 127; // on path if bright
+}
+
+function ballCanBeAt(nx,ny){
+  // sample 8 points around the ball edge; all must be on the path
+  const s = Math.max(6, Math.floor(BALL_R/3));
+  for(let a=0;a<8;a++){
+    const th = (Math.PI*2*a)/8;
+    const px = nx + Math.cos(th)*(BALL_R-1);
+    const py = ny + Math.sin(th)*(BALL_R-1);
+    if(!pointInsidePath(px,py)) return false;
+  }
+  // also sample center
+  return pointInsidePath(nx,ny);
+}
+
+// =================== Rendering ===================
+function drawPaths(ctx){
+  ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,SIZE,SIZE);
+  ctx.lineCap='round'; ctx.lineJoin='round'; ctx.lineWidth=PATH_W; ctx.strokeStyle='#d7d7db';
+  for(const [A,B] of mazeEdges){ ctx.beginPath(); ctx.moveTo(A.x,A.y); ctx.lineTo(B.x,B.y); ctx.stroke(); }
+}
+function drawGoal(ctx){
+  ctx.fillStyle='#f59e0b'; // orange
+  ctx.beginPath(); ctx.arc(endPos.x, endPos.y, GOAL_R, 0, Math.PI*2); ctx.fill();
+}
 function drawBall(ctx){
-  ctx.save();
-  ctx.fillStyle = '#e11d48';
-  ctx.beginPath();
-  ctx.arc(pos.x, pos.y, BALL_R, 0, Math.PI*2);
-  ctx.fill();
-  ctx.restore();
+  ctx.fillStyle='#e11d48';
+  ctx.beginPath(); ctx.arc(pos.x, pos.y, BALL_R, 0, Math.PI*2); ctx.fill();
 }
 
-// ========= p5 Sketch =========
+// =================== p5 Sketch ===================
 function setup(){
   computeSize();
-  recomputeDerived();
-  const c = createCanvas(SIZE, SIZE);
-  c.parent('wrap');
-  pixelDensity(Math.min(2, window.devicePixelRatio || 1));
-  pos = {x: cx, y: cy};
-  initOverlay();
-  window.addEventListener('resize', onResize);
+  const c = createCanvas(SIZE, SIZE); c.parent('wrap');
+  pixelDensity(Math.min(2, window.devicePixelRatio||1));
+  initSplash();
   setupOrientationGuard();
+  window.addEventListener('resize', onResize);
 }
 
 function onResize(){
-  const oldSize = SIZE;
-  computeSize();
-  recomputeDerived();
-  resizeCanvas(SIZE, SIZE);
-  const scale = SIZE/oldSize;
-  pos.x *= scale; pos.y *= scale;
-  updateOrientationGuard();
+  const old = SIZE; computeSize(); resizeCanvas(SIZE, SIZE);
+  if (maskCanvas){ buildMazeGeometry(); }
 }
 
 function draw(){
   const ctx = this.drawingContext;
-  drawPlusFlat(ctx);
+  if(!maskCanvas){ // waiting on start
+    // draw simple cross placeholder
+    ctx.fillStyle='#fff'; ctx.fillRect(0,0,SIZE,SIZE);
+    return;
+  }
+  drawPaths(ctx);
+  drawGoal(ctx);
 
-  let ax = 0, ay = 0;
-  if (usingOrientation){ ax += acc.x; ay += acc.y; }
-  ax += keyAccel.x * 0.6; ay += keyAccel.y * 0.6;
-
-  vel.x += ax; vel.y += ay;
-  vel.x *= FRICTION; vel.y *= FRICTION;
-
-  let next = { x: pos.x + vel.x, y: pos.y + vel.y };
-  const res = unionFilletedCrossClamp(next);
-  pos = res.clamped;
-
-  // Keep fully inside canvas
-  pos.x = Math.max(BALL_R, Math.min(SIZE - BALL_R, pos.x));
-  pos.y = Math.max(BALL_R, Math.min(SIZE - BALL_R, pos.y));
+  // physics
+  let ax=0, ay=0; if(usingOrientation){ ax+=acc.x; ay+=acc.y; }
+  vel.x = (vel.x + ax) * FRICTION; vel.y = (vel.y + ay) * FRICTION;
+  const nx = pos.x + vel.x, ny = pos.y + vel.y;
+  if(ballCanBeAt(nx,ny)){
+    pos.x = nx; pos.y = ny;
+  } else {
+    // simple bounce: invert smallest offending component
+    const tryX = ballCanBeAt(pos.x + vel.x, pos.y);
+    const tryY = ballCanBeAt(pos.x, pos.y + vel.y);
+    if(tryX) pos.x += vel.x; else vel.x *= -BOUNCE;
+    if(tryY) pos.y += vel.y; else vel.y *= -BOUNCE;
+  }
 
   drawBall(ctx);
-  debugOut();
+
+  // check goal
+  const d = Math.hypot(pos.x-endPos.x, pos.y-endPos.y);
+  if(!solved && d < GOAL_R*0.9){ solved = true; nextLevel(); }
 }
 
-// ========= Device Orientation Handling =========
+function nextLevel(){
+  level++;
+  buildMazeGeometry();
+  solved=false;
+}
+
+// =================== Device Orientation ===================
 function handleOrientation(e){
-  const g = e.gamma ?? 0; // left/right (-90..90)
-  const b = e.beta ?? 0;  // front/back (-180..180)
-  lastGamma = g; lastBeta = b;
-  acc.x = GRAVITY * Math.sin(g * Math.PI/180);
-  acc.y = GRAVITY * Math.sin(b * Math.PI/180);
+  const g = e.gamma ?? 0; const b = e.beta ?? 0; lastGamma=g; lastBeta=b;
+  acc.x = GRAVITY * Math.sin(g*Math.PI/180);
+  acc.y = GRAVITY * Math.sin(b*Math.PI/180);
 }
-
 async function askPermission(){
   try{
     let ok = true;
     if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function'){
-      const p1 = await DeviceOrientationEvent.requestPermission();
-      ok = ok && (p1 === 'granted');
+      const p1 = await DeviceOrientationEvent.requestPermission(); ok = ok && (p1==='granted');
     }
     if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function'){
-      const p2 = await DeviceMotionEvent.requestPermission();
-      ok = ok && (p2 === 'granted');
+      const p2 = await DeviceMotionEvent.requestPermission(); ok = ok && (p2==='granted');
     }
-    if (ok){
-      havePermission = true;
-      startOrientation();
-    }
-  }catch(err){
-    console.warn('Permission error', err);
-  }finally{
-    showHintAndFade();
-  }
+    if (ok){ havePermission=true; startOrientation(); }
+  }catch(err){ console.warn('Permission error', err); }
 }
+function startOrientation(){ window.addEventListener('deviceorientation', handleOrientation, true); usingOrientation = true; }
 
-function startOrientation(){
-  window.addEventListener('deviceorientation', handleOrientation, true);
-  usingOrientation = true;
-}
-
-function initOverlay(){
-  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-  const needsPerm = typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function';
-  const btn = document.getElementById('ovBtn');
-  btn.addEventListener('click', askPermission, {once:true});
-  if (isIOS && needsPerm){
-    setOverlayMode('permission');
-  } else {
-    startOrientation();
-    setOverlayMode('hint');
-    setTimeout(fadeOutOverlay, 900);
-  }
-}
-
-// ========= Overlay control =========
-function setOverlayMode(mode){
-  const overlay = document.getElementById('overlay');
-  const title = document.getElementById('ovTitle');
-  const text  = document.getElementById('ovText');
-  const btn   = document.getElementById('ovBtn');
-  const hint  = document.getElementById('ovHint');
-  overlay.classList.remove('hidden','fade-out');
-  if (mode === 'permission'){
-    title.textContent = 'Enable tilt controls';
-    text.textContent  = 'On iPhone/iPad, Apple requires permission to read motion/orientation sensors.';
-    btn.style.display = '';
-    hint.textContent  = '(Desktop: use arrow keys to test)';
-  } else {
-    title.textContent = 'Tilt to roll';
-    text.textContent  = '';
-    btn.style.display = 'none';
-    hint.textContent  = '';
-  }
-}
-
-function showHintAndFade(){
-  if (overlayDismissed) return;
-  setOverlayMode('hint');
-  setTimeout(fadeOutOverlay, 650);
-}
-
-function fadeOutOverlay(){
-  if (overlayDismissed) return;
-  const overlay = document.getElementById('overlay');
-  overlay.classList.add('fade-out');
-  overlay.addEventListener('transitionend', ()=>{
-    overlay.classList.add('hidden');
-    overlayDismissed = true;
+// =================== Splash / Start ===================
+function initSplash(){
+  const splash = document.getElementById('splash');
+  const beginBtn = document.getElementById('beginBtn');
+  const needsPerm = isIOS() && (typeof DeviceOrientationEvent!== 'undefined') && (typeof DeviceOrientationEvent.requestPermission==='function');
+  beginBtn.addEventListener('click', async ()=>{
+    if(needsPerm) await askPermission(); else startOrientation();
+    buildMazeGeometry();
+    fadeOut(splash);
   }, {once:true});
 }
 
-// ========= Keyboard fallback =========
-const KEYS = {ArrowLeft:false, ArrowRight:false, ArrowUp:false, ArrowDown:false};
-function updateKeyAccel(){
-  keyAccel.x = (KEYS.ArrowRight?1:0) - (KEYS.ArrowLeft?1:0);
-  keyAccel.y = (KEYS.ArrowDown?1:0) - (KEYS.ArrowUp?1:0);
-}
-window.addEventListener('keydown', (e)=>{ if (e.key in KEYS){ KEYS[e.key]=true; updateKeyAccel(); }});
-window.addEventListener('keyup',   (e)=>{ if (e.key in KEYS){ KEYS[e.key]=false; updateKeyAccel(); }});
-
-// ========= Portrait guard =========
+// =================== Portrait guard ===================
 let mql;
 function setupOrientationGuard(){
   mql = window.matchMedia('(orientation: landscape)');
-  mql.addEventListener('change', updateOrientationGuard);
-  updateOrientationGuard();
+  mql.addEventListener('change', updateOrientationGuard); updateOrientationGuard();
 }
 function updateOrientationGuard(){
   const rot = document.getElementById('rotate');
-  if (window.matchMedia('(orientation: landscape)').matches){
-    rot.classList.add('show');
-  } else {
-    rot.classList.remove('show');
-  }
-}
-
-// ========= Debug =========
-function debugOut(){
-  const el = document.getElementById('dbg');
-  el.hidden = false;
-  el.textContent = `size:${SIZE} ch:${CHANNEL_W} r:${BALL_R} fil:${FILLET}
-perm:${havePermission} orient:${usingOrientation}
-β:${lastBeta.toFixed(1)} γ:${lastGamma.toFixed(1)}
-ax:${acc.x.toFixed(3)} ay:${acc.y.toFixed(3)}`;
+  if (window.matchMedia('(orientation: landscape)').matches){ rot.classList.add('show'); }
+  else { rot.classList.remove('show'); }
 }
 </script>
 </body>
