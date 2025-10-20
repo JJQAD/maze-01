@@ -308,11 +308,29 @@ function initSplash(){
   const splash = document.getElementById('splash');
   const beginBtn = document.getElementById('beginBtn');
   const needsPerm = isIOS() && (typeof DeviceOrientationEvent!== 'undefined') && (typeof DeviceOrientationEvent.requestPermission==='function');
-  beginBtn.addEventListener('click', async ()=>{
-    if(needsPerm) await askPermission(); else startOrientation();
+
+  async function startGame(ev){
+    try{ ev?.preventDefault?.(); ev?.stopPropagation?.(); }catch(_){}
+    try{
+      if(needsPerm){
+        await askPermission(); // request; may be denied, that's OK
+      } else {
+        startOrientation();
+      }
+    }catch(err){ console.warn('begin/permission error', err); }
+    // Always proceed to build and fade, even if permission is denied (keyboard still works)
     buildMazeGeometry();
     fadeOut(splash);
-  }, {once:true});
+  }
+
+  // Bind multiple event types to be safe across iOS Safari versions
+  beginBtn.setAttribute('type','button');
+  beginBtn.addEventListener('click', startGame, {once:true});
+  beginBtn.addEventListener('touchend', startGame, {once:true});
+  // Tap anywhere on the overlay also starts
+  splash.addEventListener('click', (e)=>{ if(e.target===splash) startGame(e); }, {once:true});
+}
+, {once:true});
 }
 
 function showCongrats(){
