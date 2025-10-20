@@ -113,24 +113,44 @@ function projectToCircle(p, Cx, Cy, rad){
 
 function unionFilletedCrossClamp(next){
   const half = ARM_LEN/2;
-  const hr = CHANNEL_W/2 - BALL_R;
+  const r = CHANNEL_W/2;
+  const hr = r - BALL_R; // clearance for ball center
+  const f = FILLET;
+
   const horizA = {x: cx - half, y: cy};
   const horizB = {x: cx + half, y: cy};
   const vertA  = {x: cx, y: cy - half};
   const vertB  = {x: cx, y: cy + half};
 
+  // Fillet circle centers (tangent to inner edges), radius expanded by hr
+  const rf = f + hr;
+  const fillets = [
+    {x: cx - r + f, y: cy - r + f}, // TL
+    {x: cx + r - f, y: cy - r + f}, // TR
+    {x: cx + r - f, y: cy + r - f}, // BR
+    {x: cx - r + f, y: cy + r - f}, // BL
+  ];
+
+  // Quick inside checks (capsules or any fillet circle)
   const insideH = insideCapsule(next, horizA, horizB, hr);
   const insideV = insideCapsule(next, vertA,  vertB,  hr);
-  const insideC = (Math.hypot(next.x-cx, next.y-cy) <= (hr + FILLET));
-  if (insideH || insideV || insideC) return {clamped: next, hit:false};
+  let insideF = false;
+  for (const c of fillets){
+    if (Math.hypot(next.x - c.x, next.y - c.y) <= rf){ insideF = true; break; }
+  }
+  if (insideH || insideV || insideF) return {clamped: next, hit:false};
 
-  const ph = projectToCapsuleBoundary(next, horizA, horizB, hr);
-  const pv = projectToCapsuleBoundary(next, vertA,  vertB,  hr);
-  const pc = projectToCircle(next, cx, cy, hr + FILLET);
-  let chosen = ph;
-  if (pv.dist < chosen.dist) chosen = pv;
-  if (pc.dist < chosen.dist) chosen = pc;
+  // Otherwise clamp to nearest boundary among two capsules and four fillet circles
+  const candidates = [];
+  candidates.push(projectToCapsuleBoundary(next, horizA, horizB, hr));
+  candidates.push(projectToCapsuleBoundary(next, vertA,  vertB,  hr));
+  for (const c of fillets){
+    candidates.push(projectToCircle(next, c.x, c.y, rf));
+  }
+  let chosen = candidates[0];
+  for (let i=1;i<candidates.length;i++) if (candidates[i].dist < chosen.dist) chosen = candidates[i];
 
+  // Reflect velocity along chosen normal (gentle bounce)
   const nx = chosen.normal.x, ny = chosen.normal.y;
   const dot = vel.x*nx + vel.y*ny;
   if (dot > 0){
@@ -167,30 +187,31 @@ function drawPlusFlat(ctx){
   ctx.stroke();
   ctx.restore();
 
-  // Carve true inner fillets (quarter-circle sectors) by subtracting from the cross
+  // Carve true inner fillets using your construction:
+  // draw a circle tangent to the inner stroke lines (radius f) and subtract
   const r = CHANNEL_W/2;      // half channel width
   const f = FILLET;           // fillet radius (1/8 of end radius)
   ctx.save();
   ctx.globalCompositeOperation = 'destination-out';
   ctx.fillStyle = '#000';
 
-  // Helper to subtract a sector (quarter circle) at a given corner
-  function cutFillet(cxFil, cyFil, a0, a1){
+  // Helper to cut a quarter-circle wedge centered at (cxFil, cyFil)
+  function cut(cxFil, cyFil, a0, a1){
     ctx.beginPath();
     ctx.moveTo(cxFil, cyFil);
     ctx.arc(cxFil, cyFil, f, a0, a1, false);
     ctx.closePath();
     ctx.fill();
   }
-  // Corner centers are at \(cx ± r, cy ± r\)
-  // TL corner: center (cx - r, cy - r), interior angles 0 → π/2 (right→down)
-  cutFillet(cx - r, cy - r, 0, Math.PI/2);
-  // TR corner: center (cx + r, cy - r), interior angles π/2 → π (down→left)
-  cutFillet(cx + r, cy - r, Math.PI/2, Math.PI);
-  // BR corner: center (cx + r, cy + r), interior angles π → 3π/2 (left→up)
-  cutFillet(cx + r, cy + r, Math.PI, 1.5*Math.PI);
-  // BL corner: center (cx - r, cy + r), interior angles 3π/2 → 2π (up→right)
-  cutFillet(cx - r, cy + r, 1.5*Math.PI, 2*Math.PI);
+  // Centers shifted by f so the arc is tangent to inner edges
+  // TL (tangent to x=cx-r and y=cy-r)
+  cut(cx - r + f, cy - r + f, 0, Math.PI/2);
+  // TR (tangent to x=cx+r and y=cy-r)
+  cut(cx + r - f, cy - r + f, Math.PI/2, Math.PI);
+  // BR (tangent to x=cx+r and y=cy+r)
+  cut(cx + r - f, cy + r - f, Math.PI, 1.5*Math.PI);
+  // BL (tangent to x=cx-r and y=cy+r)
+  cut(cx - r + f, cy + r - f, 1.5*Math.PI, 2*Math.PI);
 
   ctx.restore();
 }
