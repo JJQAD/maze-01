@@ -29,6 +29,7 @@
     #rotate.show{display:flex}
 
     .debug{position:absolute;left:10px;top:10px;z-index:10;background:rgba(0,0,0,.55);color:#fff;padding:6px 8px;border-radius:8px;font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;font-size:12px}
+    .version-tag{position:absolute;right:10px;bottom:8px;z-index:40;font-size:11px;opacity:.6;font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}
 
     @media (prefers-color-scheme:dark){
       body{background:#0f1114}
@@ -47,6 +48,7 @@
         <button class="btn" id="beginBtn">Tap to Begin</button>
         <div class="hint">Tilt your phone to move the ball and solve the maze.</div>
         <div class="tiny">You'll be asked to allow motion/orientation sensors.</div>
+        <div class="tiny" id="splashVersion"></div>
       </div>
     </div>
 
@@ -60,20 +62,19 @@
 
     <div id="rotate"><div>Rotate to portrait</div></div>
     <div id="dbg" class="debug" hidden>debug</div>
+    <div id="verTag" class="version-tag"></div>
   </div>
 
 <script>
-// =================== Responsive sizing ===================
-let SIZE = 400; // canvas size = viewport width (square)
-function computeSize(){
-  const w = Math.min(window.innerWidth, 1024);
-  SIZE = Math.floor(w);
-}
+const VERSION = 'v2025-10-19c';
 
-// =================== Game config (will scale with level) ===================
-let cx, cy;            // canvas center
+// =================== Responsive sizing (full-screen) ===================
+let CAN_W = 400, CAN_H = 700; // full screen canvas
+function computeSize(){ CAN_W = window.innerWidth; CAN_H = window.innerHeight; }
+
+// =================== Game config (scales with level) ===================
 let cellSize;          // maze cell size (px)
-let PATH_W;            // visual path (channel) width
+let PATH_W;            // visual path width
 let BALL_R;            // ball radius
 let GOAL_R;            // goal dot radius (50% of ball)
 let level = 1;         // increases after each solve
@@ -88,100 +89,92 @@ let lastGamma = 0, lastBeta = 0;
 
 // maze
 let gridW, gridH;        // cells across/down
-let mazeEdges = [];      // list of corridor segments (for drawing)
+let mazeEdges = [];      // list of corridor centerline segments
 let startCell, endCell;  // {i,j}
 let startPos, endPos;    // pixel positions
 let solved = false;
 
-// offscreen collision mask
-let maskCanvas, maskCtx, maskData;
+// collision mask for BALL CENTER (eroded by BALL_R)
+let centerMask;
 
 // =================== Utilities ===================
 function fadeOut(el){ el.classList.add('fade-out'); el.addEventListener('transitionend', ()=>el.classList.add('hidden'), {once:true}); }
 function isIOS(){ return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints>1); }
 
-// =================== Maze generation (Randomized Prim) ===================
+// =================== Maze generation (Wilson's Algorithm) ===================
 function generateMaze(cols, rows){
-  // Prim on cell graph with 4-neighborhood
   const N=rows, M=cols;
-  const inMST = Array.from({length:N},()=>Array(M).fill(false));
-  const edges=[]; // frontier edges: [i,j,dir]
-  const dirs=[[1,0,'R'],[-1,0,'L'],[0,1,'D'],[0,-1,'U']];
-  function pushEdges(i,j){
-    for(const [dx,dy,tag] of dirs){
-      const ni=i+dy, nj=j+dx; // careful: i=row(y), j=col(x)
-      if(ni>=0&&ni<N&&nj>=0&&nj<M&&!inMST[ni][nj]) edges.push([i,j,ni,nj]);
+  const inTree = Array.from({length:N},()=>Array(M).fill(false));
+  const si = Math.floor(Math.random()*N), sj=Math.floor(Math.random()*M);
+  inTree[si][sj]=true;
+  const dirs=[[1,0],[ -1,0],[0,1],[0,-1]];
+  const next = (i,j)=>{
+    const options=[]; for(const [dx,dy] of dirs){ const ni=i+dy, nj=j+dx; if(ni>=0&&nj>=0&&ni<N&&nj<M) options.push([ni,nj]); }
+    return options[Math.floor(Math.random()*options.length)];
+  };
+  const parent = Array.from({length:N},()=>Array(M).fill(null));
+
+  while(true){
+    let ui=-1, uj=-1; outer: for(let i=0;i<N;i++) for(let j=0;j<M;j++){ if(!inTree[i][j]){ ui=i; uj=j; break outer; } }
+    if(ui===-1) break;
+    const visited = new Map();
+    let ci=ui, cj=uj; visited.set(ci+","+cj, null);
+    while(!inTree[ci][cj]){
+      const [ni,nj]=next(ci,cj);
+      const key=ni+","+nj;
+      if(visited.has(key)){
+        for(const k of Array.from(visited.keys())){ if(k===key) break; visited.delete(k); }
+      }
+      visited.set(key, ci+","+cj);
+      ci=ni; cj=nj;
     }
-  }
-  // seed
-  const si = Math.floor(Math.random()*N), sj = Math.floor(Math.random()*M);
-  inMST[si][sj]=true; pushEdges(si,sj);
-  const passages = new Set(); // key as "i,j -> ni,nj"
-
-  while(edges.length){
-    const k = Math.floor(Math.random()*edges.length);
-    const [i,j,ni,nj]=edges.splice(k,1)[0];
-    if(inMST[ni][nj] && inMST[i][j]) continue;
-    const ai = inMST[i][j]? i:ni, aj=inMST[i][j]? j:nj;
-    const bi = inMST[i][j]? ni:i, bj=inMST[i][j]? nj:j;
-    inMST[bi][bj]=true; pushEdges(bi,bj);
-    passages.add(`${ai},${aj}-${bi},${bj}`);
-    passages.add(`${bi},${bj}-${ai},${aj}`);
+    for(const [k,v] of visited){ const [ii,jj]=k.split(',').map(Number); inTree[ii][jj]=true; parent[ii][jj]=v; }
   }
 
-  // compute farthest endpoints via BFS distances
+  const passages = new Set();
+  for(let i=0;i<N;i++) for(let j=0;j<M;j++){
+    const p = parent[i][j]; if(!p) continue; const [pi,pj]=p.split(',').map(Number);
+    const a=`${i},${j}`, b=`${pi},${pj}`; passages.add(a+"-"+b); passages.add(b+"-"+a);
+  }
+
+  // pick far endpoints
   function cellToIdx(i,j){ return i*M + j; }
   const adj = Array.from({length:N*M},()=>[]);
   for(let i=0;i<N;i++)for(let j=0;j<M;j++){
     const id=cellToIdx(i,j);
-    for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){
-      const ni=i+dy,nj=j+dx; if(ni<0||nj<0||ni>=N||nj>=M) continue;
-      if(passages.has(`${i},${j}-${ni},${nj}`)) adj[id].push(cellToIdx(ni,nj));
-    }
+    for(const [dx,dy] of dirs){ const ni=i+dy,nj=j+dx; if(ni<0||nj<0||ni>=N||nj>=M) continue; if(passages.has(`${i},${j}-${ni},${nj}`)) adj[id].push(cellToIdx(ni,nj)); }
   }
-  function bfs(start){
-    const dist=Array(N*M).fill(Infinity); dist[start]=0; const q=[start];
-    while(q.length){
-      const v=q.shift();
-      for(const w of adj[v]) if(dist[w]===Infinity){ dist[w]=dist[v]+1; q.push(w);} }
-    return dist;
-  }
-  const s0 = 0; // arbitrary start
-  const d0 = bfs(s0);
-  let a=0; for(let k=0;k<d0.length;k++) if(d0[k]>d0[a]) a=k;
-  const d1=bfs(a); let b=0; for(let k=0;k<d1.length;k++) if(d1[k]>d1[b]) b=k;
+  function bfs(start){ const dist=Array(N*M).fill(Infinity); dist[start]=0; const q=[start]; while(q.length){ const v=q.shift(); for(const w of adj[v]) if(dist[w]===Infinity){ dist[w]=dist[v]+1; q.push(w);} } return dist; }
+  const s0=0, d0=bfs(s0); let a=0; for(let k=0;k<d0.length;k++) if(d0[k]>d0[a]) a=k; const d1=bfs(a); let b=0; for(let k=0;k<d1.length;k++) if(d1[k]>d1[b]) b=k;
   const ai=Math.floor(a/M), aj=a%M, bi=Math.floor(b/M), bj=b%M;
-
-  // store edges as pixel segments later
   return {passages, start:{i:ai,j:aj}, end:{i:bi,j:bj}, cols:M, rows:N};
 }
 
 function buildMazeGeometry(){
-  // choose grid based on level/size
-  const base = Math.max(8, Math.floor(SIZE/Math.max(44, 54 - level*3))); // heuristic
-  gridW = base; gridH = base; // square grid
-  cellSize = Math.floor(SIZE / (gridW + 2)); // padding 1 cell around
+  // choose grid based on level and screen (full-screen, with 1-cell margin)
+  const cellsAcross = Math.max(16, Math.floor(CAN_W / Math.max(40, 56 - level*2)));
+  const cellsDown   = Math.max(16, Math.floor(CAN_H / Math.max(40, 56 - level*2)));
+  gridW = cellsAcross; gridH = cellsDown;
+  cellSize = Math.min(Math.floor(CAN_W / (gridW + 2)), Math.floor(CAN_H / (gridH + 2)));
   PATH_W = Math.floor(cellSize * 0.56);
-  BALL_R = Math.floor(PATH_W * 0.45); // keep some clearance
+  BALL_R = Math.floor(PATH_W * 0.45);
   GOAL_R = Math.floor(BALL_R * 0.5);
-  cx = SIZE/2; cy = SIZE/2;
 
   const m = generateMaze(gridW, gridH);
   startCell = m.start; endCell = m.end;
 
-  // convert passages to line segments in pixel space (centerlines)
   mazeEdges = [];
   function cellCenter(i,j){
-    const x = cellSize*(j+1) + cellSize/2;
-    const y = cellSize*(i+1) + cellSize/2;
+    const offsetX = Math.floor((CAN_W - (gridW+2)*cellSize)/2);
+    const offsetY = Math.floor((CAN_H - (gridH+2)*cellSize)/2);
+    const x = cellSize*(j+1) + cellSize/2 + offsetX;
+    const y = cellSize*(i+1) + cellSize/2 + offsetY;
     return {x,y};
   }
   for(let i=0;i<gridH;i++) for(let j=0;j<gridW;j++){
-    const id = `${i},${j}`;
-    for(const [dx,dy] of [[1,0],[0,1]]){ // only right & down to avoid dupes
+    for(const [dx,dy] of [[1,0],[0,1]]){ // right & down only
       const ni=i+dy,nj=j+dx; if(ni>=gridH||nj>=gridW) continue;
-      const keyAB = `${i},${j}-${ni},${nj}`;
-      if(m.passages.has(keyAB)){
+      if(m.passages.has(`${i},${j}-${ni},${nj}`)){
         const A = cellCenter(i,j), B = cellCenter(ni,nj);
         mazeEdges.push([A,B]);
       }
@@ -191,57 +184,38 @@ function buildMazeGeometry(){
   endPos   = cellCenter(endCell.i,   endCell.j);
   pos = {x:startPos.x, y:startPos.y}; vel={x:0,y:0};
 
-  // build collision mask
   buildCollisionMask();
 }
 
 function buildCollisionMask(){
-  maskCanvas = document.createElement('canvas');
-  maskCanvas.width = SIZE; maskCanvas.height = SIZE;
-  maskCtx = maskCanvas.getContext('2d');
-  maskCtx.clearRect(0,0,SIZE,SIZE);
-  // draw paths (grey on main, white on mask over black background)
-  maskCtx.fillStyle='#000'; maskCtx.fillRect(0,0,SIZE,SIZE);
-  maskCtx.lineCap='round'; maskCtx.lineJoin='round';
-  maskCtx.lineWidth = PATH_W;
-  maskCtx.strokeStyle='#fff';
-  // draw outer padding cross-connections through passages
-  for(const [A,B] of mazeEdges){
-    maskCtx.beginPath(); maskCtx.moveTo(A.x, A.y); maskCtx.lineTo(B.x, B.y); maskCtx.stroke();
-  }
-  // Start/End centers are already on paths
-  maskData = maskCtx.getImageData(0,0,SIZE,SIZE).data;
+  // Build eroded mask for BALL CENTER to guarantee the ball never overlaps path edges
+  const cCanvas = document.createElement('canvas');
+  cCanvas.width = CAN_W; cCanvas.height = CAN_H;
+  const cctx = cCanvas.getContext('2d');
+  cctx.clearRect(0,0,CAN_W,CAN_H);
+  cctx.fillStyle='#000'; cctx.fillRect(0,0,CAN_W,CAN_H);
+  cctx.lineCap='round'; cctx.lineJoin='round';
+  const eroded = Math.max(1, PATH_W - 2*BALL_R + 2); // +2 px safety to avoid numerical gaps
+  cctx.lineWidth = eroded;
+  cctx.strokeStyle='#fff';
+  for(const [A,B] of mazeEdges){ cctx.beginPath(); cctx.moveTo(A.x, A.y); cctx.lineTo(B.x, B.y); cctx.stroke(); }
+  centerMask = cctx.getImageData(0,0,CAN_W,CAN_H).data;
 }
 
-function pointInsidePath(x,y){
-  // sample mask (white = path)
-  const ix = Math.max(0, Math.min(SIZE-1, Math.round(x)));
-  const iy = Math.max(0, Math.min(SIZE-1, Math.round(y)));
-  const idx = (iy*SIZE + ix)*4 + 0; // read red
-  return maskData[idx] > 127; // on path if bright
-}
-
-function ballCanBeAt(nx,ny){
-  // sample 8 points around the ball edge; all must be on the path
-  const s = Math.max(6, Math.floor(BALL_R/3));
-  for(let a=0;a<8;a++){
-    const th = (Math.PI*2*a)/8;
-    const px = nx + Math.cos(th)*(BALL_R-1);
-    const py = ny + Math.sin(th)*(BALL_R-1);
-    if(!pointInsidePath(px,py)) return false;
-  }
-  // also sample center
-  return pointInsidePath(nx,ny);
+function pointInsideCenterMask(x,y){
+  const ix = Math.max(0, Math.min(CAN_W-1, Math.round(x)));
+  const iy = Math.max(0, Math.min(CAN_H-1, Math.round(y)));
+  return centerMask[(iy*CAN_W + ix)*4] > 127;
 }
 
 // =================== Rendering ===================
 function drawPaths(ctx){
-  ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,SIZE,SIZE);
+  ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,CAN_W,CAN_H);
   ctx.lineCap='round'; ctx.lineJoin='round'; ctx.lineWidth=PATH_W; ctx.strokeStyle='#d7d7db';
   for(const [A,B] of mazeEdges){ ctx.beginPath(); ctx.moveTo(A.x,A.y); ctx.lineTo(B.x,B.y); ctx.stroke(); }
 }
 function drawGoal(ctx){
-  ctx.fillStyle='#f59e0b'; // orange
+  ctx.fillStyle='#f59e0b';
   ctx.beginPath(); ctx.arc(endPos.x, endPos.y, GOAL_R, 0, Math.PI*2); ctx.fill();
 }
 function drawBall(ctx){
@@ -252,54 +226,48 @@ function drawBall(ctx){
 // =================== p5 Sketch ===================
 function setup(){
   computeSize();
-  const c = createCanvas(SIZE, SIZE); c.parent('wrap');
+  const c = createCanvas(CAN_W, CAN_H); c.parent('wrap');
   pixelDensity(Math.min(2, window.devicePixelRatio||1));
   initSplash();
   setupOrientationGuard();
   window.addEventListener('resize', onResize);
+  document.getElementById('splashVersion').textContent = VERSION;
+  document.getElementById('verTag').textContent = VERSION + ' • jjqad.github.io/maze-01/';
 }
 
 function onResize(){
-  const old = SIZE; computeSize(); resizeCanvas(SIZE, SIZE);
-  if (maskCanvas){ buildMazeGeometry(); }
+  computeSize(); resizeCanvas(CAN_W, CAN_H);
+  if (centerMask){ buildMazeGeometry(); }
 }
 
 function draw(){
   const ctx = this.drawingContext;
-  if(!maskCanvas){ // waiting on start
-    // draw simple cross placeholder
-    ctx.fillStyle='#fff'; ctx.fillRect(0,0,SIZE,SIZE);
-    return;
-  }
+  if(!centerMask){ ctx.fillStyle='#fff'; ctx.fillRect(0,0,CAN_W,CAN_H); return; }
   drawPaths(ctx);
   drawGoal(ctx);
 
   // physics
   let ax=0, ay=0; if(usingOrientation){ ax+=acc.x; ay+=acc.y; }
   vel.x = (vel.x + ax) * FRICTION; vel.y = (vel.y + ay) * FRICTION;
-  const nx = pos.x + vel.x, ny = pos.y + vel.y;
-  if(ballCanBeAt(nx,ny)){
+  let nx = pos.x + vel.x, ny = pos.y + vel.y;
+  // strictly keep ball center inside eroded mask
+  if(pointInsideCenterMask(nx,ny)){
     pos.x = nx; pos.y = ny;
   } else {
-    // simple bounce: invert smallest offending component
-    const tryX = ballCanBeAt(pos.x + vel.x, pos.y);
-    const tryY = ballCanBeAt(pos.x, pos.y + vel.y);
+    const tryX = pointInsideCenterMask(pos.x + vel.x, pos.y);
+    const tryY = pointInsideCenterMask(pos.x, pos.y + vel.y);
     if(tryX) pos.x += vel.x; else vel.x *= -BOUNCE;
     if(tryY) pos.y += vel.y; else vel.y *= -BOUNCE;
   }
 
   drawBall(ctx);
 
-  // check goal
+  // goal check
   const d = Math.hypot(pos.x-endPos.x, pos.y-endPos.y);
-  if(!solved && d < GOAL_R*0.9){ solved = true; nextLevel(); }
+  if(!solved && d < GOAL_R*0.9){ solved = true; showCongrats(); }
 }
 
-function nextLevel(){
-  level++;
-  buildMazeGeometry();
-  solved=false;
-}
+function nextLevel(){ level++; buildMazeGeometry(); solved=false; }
 
 // =================== Device Orientation ===================
 function handleOrientation(e){
@@ -321,7 +289,7 @@ async function askPermission(){
 }
 function startOrientation(){ window.addEventListener('deviceorientation', handleOrientation, true); usingOrientation = true; }
 
-// =================== Splash / Start ===================
+// =================== Splash / Start / Congrats ===================
 function initSplash(){
   const splash = document.getElementById('splash');
   const beginBtn = document.getElementById('beginBtn');
@@ -331,6 +299,20 @@ function initSplash(){
     buildMazeGeometry();
     fadeOut(splash);
   }, {once:true});
+}
+
+function showCongrats(){
+  const cg = document.getElementById('congrats');
+  cg.classList.remove('hidden');
+  cg.classList.remove('fade-out');
+  const again = document.getElementById('againBtn');
+  again.onclick = ()=>{
+    cg.classList.add('fade-out');
+    cg.addEventListener('transitionend', ()=>{
+      cg.classList.add('hidden');
+      nextLevel();
+    }, {once:true});
+  };
 }
 
 // =================== Portrait guard ===================
