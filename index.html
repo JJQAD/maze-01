@@ -167,44 +167,30 @@ function drawPlusFlat(ctx){
   ctx.stroke();
   ctx.restore();
 
-  // Carve true inner fillets via destination-out quarter arcs
-  const r = CHANNEL_W/2;
-  const f = FILLET;
+  // Carve true inner fillets (quarter-circle sectors) by subtracting from the cross
+  const r = CHANNEL_W/2;      // half channel width
+  const f = FILLET;           // fillet radius (1/8 of end radius)
   ctx.save();
   ctx.globalCompositeOperation = 'destination-out';
   ctx.fillStyle = '#000';
 
-  // TL corner
-  let fx = cx - (r - f), fy = cy - (r - f);
-  ctx.beginPath();
-  ctx.moveTo(fx, fy);
-  ctx.arc(fx, fy, f, 0, Math.PI/2, false);
-  ctx.closePath();
-  ctx.fill();
-
-  // TR corner
-  fx = cx + (r - f); fy = cy - (r - f);
-  ctx.beginPath();
-  ctx.moveTo(fx, fy);
-  ctx.arc(fx, fy, f, Math.PI/2, Math.PI, false);
-  ctx.closePath();
-  ctx.fill();
-
-  // BL corner
-  fx = cx - (r - f); fy = cy + (r - f);
-  ctx.beginPath();
-  ctx.moveTo(fx, fy);
-  ctx.arc(fx, fy, f, 1.5*Math.PI, 2*Math.PI, false);
-  ctx.closePath();
-  ctx.fill();
-
-  // BR corner
-  fx = cx + (r - f); fy = cy + (r - f);
-  ctx.beginPath();
-  ctx.moveTo(fx, fy);
-  ctx.arc(fx, fy, f, Math.PI, 1.5*Math.PI, false);
-  ctx.closePath();
-  ctx.fill();
+  // Helper to subtract a sector (quarter circle) at a given corner
+  function cutFillet(cxFil, cyFil, a0, a1){
+    ctx.beginPath();
+    ctx.moveTo(cxFil, cyFil);
+    ctx.arc(cxFil, cyFil, f, a0, a1, false);
+    ctx.closePath();
+    ctx.fill();
+  }
+  // Corner centers are at \(cx ± r, cy ± r\)
+  // TL corner: center (cx - r, cy - r), interior angles 0 → π/2 (right→down)
+  cutFillet(cx - r, cy - r, 0, Math.PI/2);
+  // TR corner: center (cx + r, cy - r), interior angles π/2 → π (down→left)
+  cutFillet(cx + r, cy - r, Math.PI/2, Math.PI);
+  // BR corner: center (cx + r, cy + r), interior angles π → 3π/2 (left→up)
+  cutFillet(cx + r, cy + r, Math.PI, 1.5*Math.PI);
+  // BL corner: center (cx - r, cy + r), interior angles 3π/2 → 2π (up→right)
+  cutFillet(cx - r, cy + r, 1.5*Math.PI, 2*Math.PI);
 
   ctx.restore();
 }
