@@ -45,7 +45,11 @@
       <div class="card">
         <div class="title">Tilt Maze</div>
         <div class="sub">by JJQAD</div>
-        <button class="btn" id="beginBtn" type="button" style="touch-action:manipulation" onclick="beginGame(event)">
+        <button class="btn" id="beginBtn"
+                type="button"
+                style="touch-action:manipulation"
+                onclick="beginGame(event)"
+                ontouchstart="beginGame(event)">
           Tap to Begin
         </button>
         <div class="hint">Tilt your phone to move the ball and solve the maze.</div>
@@ -72,7 +76,7 @@
   </div>
 
 <script>
-const VERSION = 'v2025-10-20b';
+const VERSION = 'v2025-10-20c';
 
 /* =================== Responsive sizing (full-screen) =================== */
 let CAN_W = 400, CAN_H = 700;
@@ -95,10 +99,10 @@ let usingOrientation = false, havePermission = false;
 let lastGamma = 0, lastBeta = 0;
 
 // maze
-let gridW, gridH;              // cells across/down
-let mazeEdges = [];            // corridor centerline segments
-let startCell, endCell;        // {i,j}
-let startPos, endPos;          // pixel positions
+let gridW, gridH;
+let mazeEdges = [];
+let startCell, endCell;
+let startPos, endPos;
 let solved = false;
 
 // collision mask for BALL CENTER (eroded by BALL_R)
@@ -116,7 +120,7 @@ function generateMaze(cols, rows){
   const neighbors = (i,j)=>{
     const out=[]; for(const [dx,dy] of dirs){ const ni=i+dy, nj=j+dx; if(ni>=0&&nj>=0&&ni<H&&nj<W) out.push([ni,nj]); } return out;
   };
-  // seed with one random cell in the tree
+  // seed with one random cell
   const si = Math.floor(Math.random()*H), sj=Math.floor(Math.random()*W); inTree[si][sj]=true;
   const parent = Array.from({length:H},()=>Array(W).fill(null));
   const total = H*W; let added = 1;
@@ -125,7 +129,7 @@ function generateMaze(cols, rows){
     // pick a random unvisited start
     let ui, uj; do { ui=Math.floor(Math.random()*H); uj=Math.floor(Math.random()*W);} while(inTree[ui][uj]);
 
-    // loop-erased random walk to the existing tree
+    // loop-erased random walk to existing tree
     const path=[]; const index=new Map();
     let ci=ui, cj=uj; path.push([ci,cj]); index.set(ci+','+cj,0);
     while(!inTree[ci][cj]){
@@ -133,15 +137,14 @@ function generateMaze(cols, rows){
       const [ni,nj] = opts[Math.floor(Math.random()*opts.length)];
       const key = ni+','+nj;
       if(index.has(key)){
-        // erase loop by truncating back to first occurrence
         const cut = index.get(key);
-        path.length = cut+1;
+        path.length = cut+1; // erase loop
       } else {
         path.push([ni,nj]); index.set(key, path.length-1);
       }
       ci=ni; cj=nj;
     }
-    // add the path to the tree and store parents (undirected later)
+    // add path to tree; track parents (we'll make undirected set later)
     for(let k=0;k<path.length-1;k++){
       const [a1,b1]=path[k], [a2,b2]=path[k+1];
       if(!inTree[a1][b1]){ inTree[a1][b1]=true; added++; parent[a1][b1]=a2+','+b2; }
@@ -149,19 +152,19 @@ function generateMaze(cols, rows){
     }
   }
 
-  // undirected edge set
+  // undirected passages
   const passages = new Set();
   for(let i=0;i<H;i++) for(let j=0;j<W;j++){
     const p = parent[i][j]; if(!p) continue; const [pi,pj]=p.split(',').map(Number);
     const a=`${i},${j}`, b=`${pi},${pj}`; passages.add(a+"-"+b); passages.add(b+"-"+a);
   }
 
-  // pick far endpoints using BFS
+  // pick far endpoints via BFS
   function cellToIdx(i,j){ return i*W + j; }
   const adj = Array.from({length:H*W},()=>[]);
   for(let i=0;i<H;i++)for(let j=0;j<W;j++){
     const id=cellToIdx(i,j);
-    for(const [dx,dy] of dirs){
+    for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){
       const ni=i+dy,nj=j+dx; if(ni<0||nj<0||ni>=H||nj>=W) continue;
       if(passages.has(`${i},${j}-${ni},${nj}`)) adj[id].push(cellToIdx(ni,nj));
     }
@@ -262,6 +265,17 @@ function setup(){
   window.addEventListener('resize', onResize);
   document.getElementById('splashVersion').textContent = VERSION;
   document.getElementById('verTag').textContent = VERSION + ' • jjqad.github.io/maze-01/';
+
+  // Global safety net: first user gesture anywhere starts the game
+  const firstGesture = (ev)=>{ beginGame(ev); cleanup(); };
+  const cleanup = ()=>{
+    document.removeEventListener('touchstart', firstGesture, {capture:true});
+    document.removeEventListener('pointerdown', firstGesture, {capture:true});
+    document.removeEventListener('mousedown', firstGesture, {capture:true});
+  };
+  document.addEventListener('touchstart', firstGesture, {capture:true, passive:false});
+  document.addEventListener('pointerdown', firstGesture, {capture:true});
+  document.addEventListener('mousedown', firstGesture, {capture:true});
 }
 
 function onResize(){
@@ -322,7 +336,7 @@ function startOrientation(){
 }
 
 /* =================== Splash / Start / Congrats =================== */
-// Global begin handler so inline onclick works on iOS Safari
+// Global begin handler so inline onclick/ontouchstart works on iOS Safari
 async function beginGame(ev){
   try { ev?.preventDefault?.(); ev?.stopPropagation?.(); } catch {}
   const needsPerm = isIOS()
@@ -343,16 +357,19 @@ window.beginGame = beginGame;
 function initSplash(){
   const splash = document.getElementById('splash');
   const btn = document.getElementById('beginBtn');
+  const once = { once:true, passive:false };
 
-  // Redundant bindings in case inline is stripped or blocked
-  const once = { once:true };
-  btn.addEventListener('pointerup', beginGame, once);
-  btn.addEventListener('touchend', beginGame, once);
-  btn.addEventListener('click', beginGame, once);
+  // Redundant bindings on the button
+  btn.addEventListener('pointerdown', beginGame, once);
+  btn.addEventListener('touchstart', beginGame, once);
+  btn.addEventListener('pointerup',   beginGame, once);
+  btn.addEventListener('touchend',    beginGame, once);
+  btn.addEventListener('click',       beginGame, once);
 
   // Tap anywhere on the overlay background
-  splash.addEventListener('pointerup', (e)=>{ if (e.target===splash) beginGame(e); }, once);
-  splash.addEventListener('click',     (e)=>{ if (e.target===splash) beginGame(e); }, once);
+  splash.addEventListener('pointerdown', (e)=>{ if (e.target===splash) beginGame(e); }, once);
+  splash.addEventListener('touchstart',  (e)=>{ if (e.target===splash) beginGame(e); }, once);
+  splash.addEventListener('click',       (e)=>{ if (e.target===splash) beginGame(e); }, once);
 }
 
 function showCongrats(){
